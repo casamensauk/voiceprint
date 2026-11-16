@@ -125,7 +125,7 @@ def _build_cache_key(text: str, cfg: dict[str, str], use_openrouter: bool) -> st
         if (use_openrouter and cfg["api_key"])
         else "offline_v2"
     )
-    raw = f"v2_3|{mode_tag}|{cfg['regen_models']}|{cfg['arbiter_model']}|{text}"
+    raw = f"v2_4|{mode_tag}|{cfg['regen_models']}|{cfg['arbiter_model']}|{text}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 

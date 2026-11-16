@@ -117,8 +117,12 @@ def run_arbiter_synthesis(
         "scaffolding supports higher ai_score.\n"
         "4. Protect genuine human writing when you observe real-world specificity (concrete dates, citations, measurements, lived idiosyncrasies, "
         "personal voice/contractions, sharp burstiness variation) and low RLHF scaffolding.\n"
-        "5. Detect AI-Humanizer evasion (is_humanized=true, humanizer_score 0.0-1.0) on awkward thesaurus swaps, mixed-script homoglyphs, "
-        "invisible Unicode watermarks, or uniform AI syntax masked with forced contractions.\n"
+        "5. Detect AI-Humanizer & LLM-paraphraser evasion (is_humanized=true, humanizer_score >= 0.75, and ai_score >= 0.75): "
+        "flag BOTH classic evasion artifacts (awkward thesaurus swaps, mixed-script homoglyphs, invisible Unicode watermarks, "
+        "uniform syntax masked with forced contractions) AND modern LLM-humanizer scrubbing where AI structure is rewritten into "
+        "faux-conversational 2-sentence explainer paragraphs ('You can use X to...', 'Another good way to use X is...', 'X is really good for...'), "
+        "generic 'you / your business' paraphrases of marketing/coursework checklists ('influencer partnerships', 'high-quality photos and videos', "
+        "'social proof and engagement'), or mismatched tacked-on closings ('Best.'), even when DNA-GPT BScore is moderate or low.\n"
         "6. Return strict JSON with overall_summary and windows[{window_index, ai_score, is_humanized, humanizer_score, reasons}]."
     )
     user_prompt = json.dumps({"windows_evidence": evidence_blocks}, ensure_ascii=False)

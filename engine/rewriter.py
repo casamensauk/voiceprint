@@ -156,22 +156,23 @@ def _build_llm_prompts(
         edits_block = f"\nPAST CORRECTIONS SHOWING HOW THIS USER TWEAKS DRAFTS:\n{pairs_txt}"
 
     system_prompt = (
-        f"You are VoicePrint, a ghostwriter that rewrites text so it sounds 100% written by the human author "
-        f"shown in their writing samples below, tailored for '{context_mode}' mode with zero AI statistical fingerprints.\n\n"
+        f"You are VoicePrint, a personal writing assistant that edits and rephrases the user's draft notes, "
+        f"messages, and emails into their natural voice from the samples below, tailored for '{context_mode}' mode.\n\n"
         f"RULES:\n"
         f"1. Preserve the core facts and meaning accurately, without inventing facts or adding fluff.\n"
-        f"2. Break AI cadence completely: mix at least one crisp 4-9 word sentence with longer natural ones, and vary how sentences start.\n"
-        f"3. Write directly like a real person talking/writing (use contractions naturally like it's, don't, you'll, can't matching Voice DNA). NEVER leave encyclopedic textbook templates like '[X] gives/allows businesses a dedicated... so customers can...' intact.\n"
-        f"4. NEVER use parallel 3-or-4-item Oxford-comma lists ('a, b, c, and d'), RLHF framing ('Instead of...', 'By ...ing,', 'At its core,', 'Ultimately,'), 'Heading: Explanation' colons, Unicode em-dashes (—), 'Not only ... but also', or '**Label**:' bullets.\n"
-        f"5. NEVER use AI clichés (delve, tapestry, testament, underscore, multifaceted, foster, realm, pivotal, crucial, intricate, meticulous, vibrant, landscape, embark, unleash, elevate, leverage, synergy, seamless, robust, comprehensive, transformative, moreover, furthermore, in conclusion, it's worth noting, at the end of the day).\n"
-        f"6. Rewrite intensity: {intensity}.\n"
-        f"7. VOICE DNA TARGETS:\n{directives}"
+        f"2. Use varied, natural sentence cadence (mix crisp 4-9 word sentences with longer thoughts) and straight keyboard apostrophes/quotes.\n"
+        f"3. Match the user's Voice DNA level of contractions (it's, don't, you'll, can't) and direct tone without third-person textbook framing.\n"
+        f"4. NEVER tack on email sign-offs ('Best.', 'Cheers.', 'Thanks.') unless the input text itself is an email or already ends with a sign-off.\n"
+        f"5. NEVER use faux-casual list transitions ('Another good way to use X is...', 'X is really good for...'), parallel 3-or-4-item Oxford-comma lists, RLHF framing ('Instead of...', 'By ...ing,', 'At its core,', 'Ultimately,'), 'Heading: Explanation' colons, Unicode em-dashes (—), 'Not only ... but also', or '**Label**:' bullets.\n"
+        f"6. NEVER use AI clichés (delve, tapestry, testament, underscore, multifaceted, foster, realm, pivotal, crucial, intricate, meticulous, vibrant, landscape, embark, unleash, elevate, leverage, synergy, seamless, robust, comprehensive, transformative, moreover, furthermore, in conclusion, it's worth noting, at the end of the day).\n"
+        f"7. Rewrite intensity: {intensity}.\n"
+        f"8. VOICE DNA TARGETS:\n{directives}"
         f"{rules_block}"
         f"{samples_block}"
         f"{edits_block}\n\n"
         f"Return ONLY the rewritten text — no preamble, no quotes, no explanation."
     )
-    user_prompt = f"Rewrite this text so it genuinely sounds like me:\n\n{text}"
+    user_prompt = f"Edit this draft into my natural writing voice:\n\n{text}"
     return system_prompt, user_prompt
 
 
@@ -429,11 +430,29 @@ def _apply_contractions(text: str, target_rate: float) -> str:
     return out
 
 
-def _apply_surface_dna(text: str, context_mode: str, dna: dict[str, Any], intensity: str) -> str:
+def _apply_surface_dna(
+    text: str,
+    context_mode: str,
+    dna: dict[str, Any],
+    intensity: str,
+    original_text: str = "",
+) -> str:
     """Apply user's personal casing, punctuation, and trailing-period habits."""
-    out = text.strip()
+    out = (
+        text.strip()
+        .replace("\u2019", "'")
+        .replace("\u2018", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+    )
     if not out:
         return out
+
+    # Strip hallucinated email sign-offs appended to non-email prose
+    if context_mode != "work_email" and not re.search(
+        r"(?:best|cheers|regards)[.!]*\s*$", original_text.strip(), re.IGNORECASE
+    ):
+        out = re.sub(r"(?<=[.!?])\s+(?:Best|Cheers|Warm regards|Kind regards)\.?\s*$", "", out, flags=re.IGNORECASE)
 
     # Strip bold-colon AI bullet labels: "- **Security**: It uses..." -> "- Security: it uses..."
     out = re.sub(r"(?m)^(\s*[-*•]\s+|\s*\d+\.\s+)\*\*([^*\n]{2,50})\*\*\s*:", r"\1\2:", out)
@@ -502,6 +521,7 @@ def apply_deterministic_de_ai(
     learned_replacements: list[dict[str, Any]],
     intensity: str = "deep",
     from_llm: bool = False,
+    original_text: str = "",
 ) -> str:
     """Deterministic De-AI + Voice DNA pass (works standalone or after LLM generation)."""
     out = text.strip()
@@ -601,7 +621,7 @@ def apply_deterministic_de_ai(
     out = _modulate_burstiness(out, float(dna.get("avg_sentence_length", 12.0)), intensity, from_llm=from_llm)
 
     # 7. Personal Voice DNA surface polish
-    out = _apply_surface_dna(out, context_mode, dna, intensity)
+    out = _apply_surface_dna(out, context_mode, dna, intensity, original_text=original_text or text)
     return out
 
 
@@ -653,6 +673,7 @@ def rewrite_text(
         learned_replacements=learned_rules,
         intensity=eff_intensity,
         from_llm=bool(llm_draft),
+        original_text=cleaned,
     )
 
     # 1-pass Voice Fidelity self-check when LLM generated text
@@ -663,10 +684,8 @@ def rewrite_text(
         if float(stylo["stylometric_ai_score"]) >= 0.35:
             reasons_txt = "; ".join((stylo.get("reasons") or [])[:4])
             critique_prompt = (
-                f"Revise your draft below so it sounds genuinely written by the human author in the samples — "
-                f"eliminate these remaining AI patterns: {reasons_txt}. "
-                f"Use natural contractions, mix a short 4-8 word sentence with longer conversational lines, and drop textbook 'allows businesses to' framing or 3-item Oxford lists. "
-                f"Keep the core facts accurate and return ONLY the revised text.\n\nDraft:\n{rewritten}"
+                f"Revise this draft to better reflect the user's writing style in the samples above while addressing these stylistic cues: {reasons_txt}. "
+                f"Keep the core meaning accurate, use natural contractions, vary sentence length naturally, avoid tacked-on email closings, and return ONLY the revised text.\n\nDraft:\n{rewritten}"
             )
             refined_raw, refined_prov = _call_llm_provider(
                 provider_setting, settings, sys_prompt, critique_prompt
@@ -679,6 +698,7 @@ def rewrite_text(
                     learned_replacements=learned_rules,
                     intensity=eff_intensity,
                     from_llm=True,
+                    original_text=cleaned,
                 )
                 if float(score_window_stylometrics(refined)["stylometric_ai_score"]) < float(stylo["stylometric_ai_score"]):
                     rewritten = refined

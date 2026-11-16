@@ -96,8 +96,14 @@ def calibrate_report(
         if a_ai is not None and s_ai >= 0.65 and float(a_ai) >= 0.65:
             raw_ai = max(raw_ai, 0.45 * s_ai + 0.55 * float(a_ai))
 
-        # Combine humanizer score
+        # Combine humanizer score and prevent low DNA-GPT BScore from masking scrubbed AI prose
         hum_score = max(s_hum, float(a_hum)) if a_hum is not None else s_hum
+        if hum_score >= 0.55 or bool(arb.get("is_humanized", False)):
+            eff_hum = max(hum_score, 0.65 if arb.get("is_humanized") else hum_score)
+            hum_score = eff_hum
+            raw_ai = max(raw_ai, min(0.95, 0.30 + 0.72 * eff_hum))
+        if s_hum >= 0.65:
+            raw_ai = max(raw_ai, 0.72)
         if int(sty.get("homoglyph_count") or 0) > 0 or int(sty.get("unicode_anomaly_count") or 0) > 0:
             hum_score = max(hum_score, 0.72)
             raw_ai = max(raw_ai, 0.72)

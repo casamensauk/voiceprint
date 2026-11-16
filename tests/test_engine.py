@@ -1273,6 +1273,40 @@ class TestInHouseAiDetector(BaseEngineTestCase):
         self.assertGreaterEqual(inspector["fraction_ai"], 0.80)
         self.assertEqual(inspector["prediction_short"], "AI")
 
+    def test_llm_humanized_scrubber_text_caught_and_no_stray_signoff(self) -> None:
+        """LLM-humanized scrubber text is caught by In-House detector and stray email closings are omitted."""
+        ig_text = (
+            "You can use Instagram to show off visual products. When you have a lifestyle brand, "
+            "like a clothing shop, florist or restaurant, you\u2019ll want to display high-quality "
+            "photos and videos of your products there.\n\n"
+            "Another good way to use Instagram is through influencer partnerships. Your business can "
+            "team up with content creators to demo products, which builds social proof and engagement.\n\n"
+            "Instagram is really good for reaching young adults, especially those around 18 to 24. "
+            "Younger audiences use Instagram a lot when they\u2019re discovering new products. Best."
+        )
+        insp = analyze_text_for_ai(ig_text, use_openrouter=False, bypass_cache=True, db_path=self.db_path)
+        self.assertEqual(insp["prediction_short"], "AI")
+        self.assertGreaterEqual(insp["fraction_ai"], 0.80)
+        self.assertTrue(insp["has_humanized_segments"])
+        self.assertGreaterEqual(insp["max_humanizer_score"], 0.65)
+        stud = analyze_text(ig_text)
+        self.assertLessEqual(stud["human_score"], 30)
+        self.assertGreaterEqual(len(stud["flags"]), 2)
+
+        dna = extract_voice_dna([{"content": "Hi Bob, sounds good to me. Best.", "weight": 1.0}])
+        self.assertNotIn("best", dna["common_fillers_and_slang"])
+        cleaned = apply_deterministic_de_ai(
+            "Here\u2019s how to test Instagram for your shop. Best.",
+            context_mode="casual_chat",
+            dna=dna,
+            learned_replacements=[],
+            intensity="deep",
+            from_llm=True,
+            original_text="Instagram can showcase products.",
+        )
+        self.assertNotIn("\u2019", cleaned)
+        self.assertFalse(cleaned.endswith("Best."))
+
 
 class TestAutoUpdater(BaseEngineTestCase):
     """Test GitHub release update checking, semver comparisons, and URL safety."""

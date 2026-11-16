@@ -10,6 +10,7 @@ from engine.analyzer import (
     HIGH_RISK_AI_WORDS,
     ROBOTIC_TRANSITIONS,
     compute_contraction_stats,
+    is_signoff_fragment,
 )
 
 from .preprocessor import split_sentences_recover_collapsed
@@ -86,8 +87,21 @@ _EXPLAINER_STOCK_RE = re.compile(
     r"\b(?:so\s+(?:customers|users|people|followers)\s+can|potential\s+(?:new\s+)?customers|"
     r"turns\s+a\s+negative\s+situation\s+into\s+a\s+positive|"
     r"before\s+it\s+(?:turns\s+into|escalates)|when\s+things\s+go\s+wrong|in\s+real\s+time|"
-    r"thought[- ]leadership|call-to-action|social\s+proof|organic\s+reach|target\s+audience|"
-    r"brand\s+sentiment|behind-the-scenes|decision-makers)\b",
+    r"thought[- ]leadership|call-to-action|social\s+proof(?:\s+and\s+engagement)?|"
+    r"organic\s+reach|target\s+audience|brand\s+sentiment|behind-the-scenes|decision-makers|"
+    r"visual\s+products?|lifestyle\s+brands?|high-quality\s+photos(?:\s+and\s+videos)?|"
+    r"influencer\s+partnerships?|content\s+creators?|demo\s+products?|younger\s+audiences?|"
+    r"(?:discovering\s+new\s+products|product\s+discovery))\b",
+    re.IGNORECASE,
+)
+_FAUX_CASUAL_SCAFFOLD_RE = re.compile(
+    r"(?:^|\n|[.!?]\s+)(?:"
+    r"You\s+can\s+(?:also\s+)?use\s+[A-Z][A-Za-z0-9\s]{1,25}\s+to\b|"
+    r"Another\s+(?:good|great|easy|effective|popular|useful)\s+way\s+to\s+use\b|"
+    r"One\s+(?:good|great|easy|effective)\s+way\s+to\b|"
+    r"[A-Z][A-Za-z0-9]{2,20}\s+is\s+(?:also\s+)?really\s+(?:good|great|useful|helpful)\s+for\b|"
+    r"Your\s+(?:business|company|brand)\s+can\s+(?:also\s+)?(?:team\s+up|partner|use)\b"
+    r")",
     re.IGNORECASE,
 )
 _INLINE_TEXTBOOK_DEF_RE = re.compile(
@@ -201,6 +215,10 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
     words = _WORD_RE.findall(cleaned)
     word_count = max(1, len(words))
     sentences = split_sentences_recover_collapsed(cleaned)
+    if len(sentences) >= 3:
+        non_signoff_sents = [s for s in sentences if not is_signoff_fragment(s)]
+        if len(non_signoff_sents) >= 2:
+            sentences = non_signoff_sents
     sent_lengths = [len(s.split()) for s in sentences if s.split()]
 
     # 1. Burstiness CV & length range
@@ -273,6 +291,22 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
     which_eval_count = len(_WHICH_EVAL_RE.findall(cleaned))
     explainer_stock_count = len(_EXPLAINER_STOCK_RE.findall(cleaned))
     inline_def_count = len(_INLINE_TEXTBOOK_DEF_RE.findall(cleaned))
+    faux_scaffold_count = len(_FAUX_CASUAL_SCAFFOLD_RE.findall(cleaned))
+
+    # Multi-paragraph symmetric 2-sentence template check (common in LLM paraphrasers)
+    paras = [p.strip() for p in re.split(r"\n\s*\n", cleaned) if p.strip()]
+    two_sent_paras = 0
+    if len(paras) >= 3:
+        for para in paras:
+            p_sents = [s for s in split_sentences_recover_collapsed(para) if not is_signoff_fragment(s)]
+            if len(p_sents) == 2:
+                two_sent_paras += 1
+    is_two_sent_template = len(paras) >= 3 and (two_sent_paras / float(len(paras))) >= 0.67
+
+    has_stray_signoff = bool(
+        re.search(r"[.!?]\s+(?:Best|Cheers|Warm regards|Kind regards)\.\s*$", cleaned)
+        and not re.match(r"^\s*(?:hi|hey|hello|dear|morning|afternoon)\b", cleaned, re.IGNORECASE)
+    )
 
     has_uk_spelling = bool(_UK_SPELLING_RE.search(cleaned))
     has_oxford_comma = bool(re.search(r",\s+(?:and|or)\s+", cleaned))
@@ -403,25 +437,22 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         ai_score += 0.08
         reasons.append(f"Low moving-average lexical diversity (MATTR={mattr:.2f})")
 
-    # Human & empirical academic counter-signals (protect natural writing from false positives)
-    casual_hits = len(_CASUAL_HUMAN_MARKERS.findall(cleaned))
-    citation_hits = len(_CITATION_OR_DATA_RE.findall(cleaned))
-    has_heavy_coursework_ai = taxonomy_count >= 2 or imperative_step_count >= 3 or makes_look_count >= 2
-
-    if not has_heavy_coursework_ai:
-        if c_cnt >= 3 or (c_cnt >= 1 and casual_hits >= 1 and len(triad_hits) <= 1):
-            ai_score -= 0.14
-        if casual_hits >= 2:
-            ai_score -= min(0.22, casual_hits * 0.07)
-        if len(sent_lengths) >= 2 and min_sent_len <= 7 and cv >= 0.40:
-            ai_score -= 0.14
-
-    if citation_hits >= 2 and len(vocab_hits) == 0 and len(framing_hits) <= 2 and taxonomy_count < 2:
-        ai_score -= min(0.26, citation_hits * 0.08)
-        reasons.append(f"Empirical data / explicit citation markers present ({citation_hits})")
-
-    # Humanizer / spoofing signal
+    # Humanizer / spoofing / faux-casual paraphraser signals
     humanizer_score = 0.05
+    if faux_scaffold_count >= 2 or (
+        faux_scaffold_count >= 1 and (explainer_stock_count >= 2 or is_two_sent_template)
+    ):
+        ai_score += 0.38 if faux_scaffold_count >= 2 else 0.24
+        humanizer_score += 0.55 if faux_scaffold_count >= 2 else 0.38
+        reasons.append(f"Faux-casual LLM paraphraser topic scaffolding ({faux_scaffold_count}x)")
+    if is_two_sent_template and (explainer_stock_count >= 1 or faux_scaffold_count >= 1):
+        ai_score += 0.18
+        humanizer_score += 0.20
+        reasons.append("Symmetric 2-sentence-per-paragraph explainer template")
+    if has_stray_signoff:
+        ai_score += 0.14
+        humanizer_score += 0.22
+        reasons.append("Mismatched trailing sign-off tacked onto expository prose")
     if uni["homoglyph_count"] > 0:
         humanizer_score += min(0.85, 0.55 + uni["homoglyph_count"] * 0.15)
         ai_score = max(ai_score, 0.78)
@@ -439,6 +470,27 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         humanizer_score += 0.28
         reasons.append("Uniform sentence length masked with forced contractions")
 
+    # Human & empirical academic counter-signals (protect natural writing from false positives)
+    casual_hits = len(_CASUAL_HUMAN_MARKERS.findall(cleaned))
+    citation_hits = len(_CITATION_OR_DATA_RE.findall(cleaned))
+    has_heavy_coursework_ai = taxonomy_count >= 2 or imperative_step_count >= 3 or makes_look_count >= 2
+    has_heavy_humanizer = humanizer_score >= 0.50
+
+    if not (has_heavy_coursework_ai or has_heavy_humanizer):
+        if c_cnt >= 3 or (c_cnt >= 1 and casual_hits >= 1 and len(triad_hits) <= 1):
+            ai_score -= 0.14
+        if casual_hits >= 2:
+            ai_score -= min(0.22, casual_hits * 0.07)
+        if len(sent_lengths) >= 2 and min_sent_len <= 7 and cv >= 0.40:
+            ai_score -= 0.14
+
+    if citation_hits >= 2 and len(vocab_hits) == 0 and len(framing_hits) <= 2 and taxonomy_count < 2:
+        ai_score -= min(0.26, citation_hits * 0.08)
+        reasons.append(f"Empirical data / explicit citation markers present ({citation_hits})")
+
+    if humanizer_score >= 0.55:
+        ai_score = max(ai_score, min(0.92, 0.28 + 0.72 * humanizer_score))
+
     if not reasons:
         reasons.append("Natural lexical diversity and human sentence cadence")
     elif ai_score < 0.38 and not any("Natural" in r or "Empirical" in r for r in reasons):
@@ -450,9 +502,9 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         "burstiness_cv": round(cv, 3),
         "contraction_rate": round(contraction_rate, 3),
         "mattr": round(mattr, 3),
-        "ai_lexicon_hits": len(vocab_hits) + len(transition_hits) + len(framing_hits) + taxonomy_count + len(triad_hits) + inline_def_count,
+        "ai_lexicon_hits": len(vocab_hits) + len(transition_hits) + len(framing_hits) + taxonomy_count + len(triad_hits) + inline_def_count + faux_scaffold_count,
         "unicode_anomaly_count": uni["unicode_anomaly_count"],
         "homoglyph_count": uni["homoglyph_count"],
-        "has_personal_counter": (casual_hits >= 2 and not has_heavy_coursework_ai) or (citation_hits >= 2 and taxonomy_count < 2),
+        "has_personal_counter": (casual_hits >= 2 and not (has_heavy_coursework_ai or has_heavy_humanizer)) or (citation_hits >= 2 and taxonomy_count < 2),
         "reasons": reasons,
     }

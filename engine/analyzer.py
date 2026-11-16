@@ -205,6 +205,15 @@ CONTRACTION_PAIRS: list[tuple[str, str]] = [
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _COLON_BULLET_RE = re.compile(r"(?m)^(?:\s*[-*•]\s+|\s*\d+\.\s+)\*\*[^*\n]{2,50}\*\*\s*:")
 _NOT_ONLY_RE = re.compile(r"\bnot only\b.{2,120}\bbut also\b", re.IGNORECASE | re.DOTALL)
+_SIGNOFF_FRAGMENT_RE = re.compile(
+    r"^(?:best|cheers|thanks|thank you|regards|warm regards|kind regards)[.!?,]*$",
+    re.IGNORECASE,
+)
+
+
+def is_signoff_fragment(sentence: str) -> bool:
+    """Return True if a sentence is solely a 1-2 word sign-off tag like 'Best.' or 'Cheers.'."""
+    return bool(_SIGNOFF_FRAGMENT_RE.match(sentence.strip()))
 
 
 def split_sentences(text: str) -> list[str]:
@@ -218,7 +227,7 @@ def split_sentences(text: str) -> list[str]:
 
 def compute_contraction_stats(text: str) -> tuple[int, int, float]:
     """Return (contracted_count, expanded_count, contraction_rate)."""
-    lower = text.lower()
+    lower = text.lower().replace("\u2019", "'").replace("\u2018", "'")
     contracted = 0
     expanded = 0
     for exp_form, con_form in CONTRACTION_PAIRS:
@@ -234,6 +243,10 @@ def compute_burstiness(text: str) -> dict[str, Any]:
     from .ai_detector.preprocessor import split_sentences_recover_collapsed
 
     sentences = split_sentences_recover_collapsed(text)
+    if len(sentences) >= 3:
+        non_signoff = [s for s in sentences if not is_signoff_fragment(s)]
+        if len(non_signoff) >= 2:
+            sentences = non_signoff
     lengths = [len(s.split()) for s in sentences if s.split()]
     if not lengths:
         return {
