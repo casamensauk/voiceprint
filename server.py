@@ -29,6 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from engine.academic_coach import check_source_citations, coach_academic_draft  # noqa: E402
 from engine.ai_detector import InHouseDetectorError, analyze_text_for_ai, scan_file_inhouse  # noqa: E402
+from engine.ai_detector.agreement import pangram_agreement  # noqa: E402
 from engine.ai_detector.dna_regeneration import OpenRouterError, test_openrouter_key  # noqa: E402
 from engine.ai_detector.orchestrator import resolve_openrouter_config  # noqa: E402
 from engine.analyzer import analyze_text  # noqa: E402
@@ -135,6 +136,7 @@ def build_state_payload(requested_mode: str | None = None) -> dict[str, Any]:
         "edit_pairs": get_edit_pairs(context_mode=active_mode, limit=20),
         "history": get_rewrite_history(limit=20),
         "pangram_scans": get_pangram_scans(limit=20),
+        "pangram_agreement": pangram_agreement(),
         "maturity": _compute_maturity(len(all_samples), gold_edits, len(all_rules)),
     }
 

@@ -84,12 +84,12 @@ from engine.pangram_client import (
     scan_text_pangram,
 )
 from engine.ai_detector.stylometrics import _EXPLAINER_STOCK_RE, score_window_stylometrics
+from engine.ai_detector.agreement import pangram_agreement
 from engine.rewriter import (
-    PLAIN_WORDING_SWAPS,
-    TARGET_HUMAN_SCORE,
     apply_deterministic_de_ai,
     rewrite_text,
 )
+from engine.sanitize import strip_hidden_characters
 from engine.style_dna import extract_voice_dna, learn_from_user_edit
 from engine.updater import (
     UpdaterError,
@@ -464,55 +464,17 @@ DEAI_FIXTURE = (
     "Instagram's also good for reaching young adults, especially people 18 to 24. This younger crowd uses it a lot "
     "to find new products."
 )
-_BAD_DRAFT = (
-    "Security: Gives teams a clear way to protect shared accounts and files every day. "
-    "Speed: Gives teams a quick way to finish routine jobs without extra steps. "
-    "Cost: Gives teams a lower bill each month than the older setup. "
-    "Support: Gives teams a named person to contact when something breaks."
-)
-_GOOD_DRAFT = (
-    "Honestly, I'd just keep the setup simple. Shared accounts get a password manager, and that's it. "
-    "Quick jobs? Automate them. The older tool cost more every month, so we dropped it and when something "
-    "breaks there's one person to call."
-)
 
 
-class TestDeAiRepairLoop(BaseEngineTestCase):
-    """Detector findings, deterministic repairs, and the score-driven LLM repair loop (LLM always stubbed)."""
+class TestDeAiFindings(BaseEngineTestCase):
+    """Detector findings and the (now light) deterministic clean-up; LLM always stubbed."""
 
-    def _rewrite(self, text: str, replies: list[Any], **settings: Any) -> tuple[dict[str, Any], MagicMock]:
-        update_settings(settings, db_path=self.db_path) if settings else None
-        stub = MagicMock(side_effect=[(r, "stub-llm") if r else (None, "local-dna-engine") for r in replies])
-        with patch("engine.rewriter._call_llm_provider", stub):
-            res = rewrite_text(text, context_mode="casual_chat", intensity="deep", save_history=False, db_path=self.db_path)
-        return res, stub
-
-    def test_two_sentence_paragraph_template_is_merged_in_order(self) -> None:
-        text = (
-            "Our shop opens at nine most days. People queue outside before then.\n\n"
-            "We sell bread and a few cakes. The sourdough goes first every morning.\n\n"
-            "Lunch is quieter than you'd think. Most regulars come back around four."
-        )
-        out = apply_deterministic_de_ai(text, "casual_chat", extract_voice_dna([]), [], intensity="deep", from_llm=True)
-        self.assertLess(len([p for p in out.split("\n\n") if p.strip()]), 3)
-        self.assertEqual(" ".join(out.split()), " ".join(text.split()))
-
-    def test_fixture_scores_ai_then_repairs_deterministically(self) -> None:
+    def test_v125_repairs_are_gone(self) -> None:
         dna = extract_voice_dna([])
-        self.assertLess(analyze_text(DEAI_FIXTURE)["human_score"], 50)
         out = apply_deterministic_de_ai(DEAI_FIXTURE, "casual_chat", dna, [], intensity="deep", from_llm=True)
-        self.assertGreaterEqual(analyze_text(out, dna)["human_score"], 70)
-        for fact in ("18 to 24", "florist", "restaurant"):
-            self.assertIn(fact, out)
-        self.assertNotRegex(out, r",\s+which\s+helps")
-        self.assertFalse(_EXPLAINER_STOCK_RE.search(out))
-        # subtle intensity leaves the text alone
-        subtle = apply_deterministic_de_ai(DEAI_FIXTURE, "casual_chat", dna, [], intensity="subtle", from_llm=True)
-        self.assertIn("content creators", subtle)
-
-    def test_plain_swaps_never_rematch_stock_regex(self) -> None:
-        for plain in PLAIN_WORDING_SWAPS.values():
-            self.assertFalse(_EXPLAINER_STOCK_RE.search(plain), plain)
+        self.assertIn(", which helps", out)
+        self.assertIn("content creators", out)
+        self.assertEqual(len([p for p in out.split("\n\n") if p.strip()]), 3)
 
     def test_findings_report_matched_text(self) -> None:
         res = score_window_stylometrics(DEAI_FIXTURE)
@@ -524,42 +486,129 @@ class TestDeAiRepairLoop(BaseEngineTestCase):
         self.assertEqual(by_reason["Evaluative ', which [verb]s' clause"], [", which helps"])
         self.assertEqual(by_reason["Symmetric 2-sentence-per-paragraph template"], [])
 
-    def test_loop_bad_then_good_returns_good(self) -> None:
-        res, stub = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT, _GOOD_DRAFT])
-        self.assertEqual(stub.call_count, 2)
-        self.assertEqual(res["repair_rounds"], 1)
-        self.assertIn("password manager", res["rewritten"])
-        self.assertGreaterEqual(res["after"]["human_score"], TARGET_HUMAN_SCORE)
-        # the revision request quotes the flagged text
-        revision_prompt = stub.call_args_list[1][0][3]
-        self.assertIn("Gives teams a", revision_prompt)
 
-    def test_loop_always_bad_is_capped_and_falls_back_to_floor(self) -> None:
-        res, stub = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT] * 5)
-        self.assertEqual(stub.call_count, 3)  # initial + default 2 repair rounds
-        self.assertEqual(res["repair_rounds"], 2)
-        self.assertEqual(res["provider_used"], "local-dna-engine (fallback)")
-        self.assertGreaterEqual(res["after"]["human_score"], TARGET_HUMAN_SCORE)
+class TestHiddenCharacters(BaseEngineTestCase):
+    """strip_hidden_characters per category, plus rewrite_text integration."""
 
-    def test_zero_repair_rounds_makes_single_call(self) -> None:
-        res, stub = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT] * 5, rewrite_max_repair_rounds=0)
+    def test_zero_width_and_soft_hyphen_removed(self) -> None:
+        out, rep = strip_hidden_characters("he\u200bl\u200cl\u2060o\ufeff wo\u00adrld\u180e")
+        self.assertEqual(out, "hello world")
+        self.assertEqual(rep["removed"], 6)
+        self.assertEqual(rep["by_category"]["zero_width"], 6)
+
+    def test_exotic_spaces_become_normal_space(self) -> None:
+        out, rep = strip_hidden_characters("a\u00a0b\u2003c\u202fd\u3000e\u2009f")
+        self.assertEqual(out, "a b c d e f")
+        self.assertEqual(rep["replaced"], 5)
+        self.assertEqual(rep["removed"], 0)
+
+    def test_bidi_tags_variation_private_use_and_controls_removed(self) -> None:
+        text = "a\u202eb\u200fc\u2066d" + chr(0xE0041) + "e\ufe00f" + chr(0xE0100) + "g\ue000h\x07i\x85j\r\nk\tl"
+        out, rep = strip_hidden_characters(text)
+        self.assertEqual(out, "abcdefghij\nk\tl")
+        cats = rep["by_category"]
+        self.assertEqual(cats["bidi_control"], 3)
+        self.assertEqual(cats["tag_character"], 1)
+        self.assertEqual(cats["variation_selector"], 2)
+        self.assertEqual(cats["private_use"], 1)
+        self.assertEqual(cats["control_code"], 2)
+
+    def test_homoglyph_in_latin_word_replaced_but_pure_cyrillic_kept(self) -> None:
+        out, rep = strip_hidden_characters("p\u0430ypal \u043f\u0440\u0438\u0432\u0435\u0442 all\u03bfy")
+        self.assertEqual(out, "paypal \u043f\u0440\u0438\u0432\u0435\u0442 alloy")
+        # Distinguishable Greek letters in scientific terms are left alone
+        science, _ = strip_hidden_characters("\u03b2-carotene at 5\u03bcm")
+        self.assertEqual(science, "\u03b2-carotene at 5\u03bcm")
+        self.assertEqual(rep["replaced"], 2)
+        self.assertEqual(rep["by_category"]["homoglyph"], 2)
+        word, _ = strip_hidden_characters("\u043f\u0440\u043e\u0441\u0442\u043e")
+        self.assertEqual(word, "\u043f\u0440\u043e\u0441\u0442\u043e")
+
+    def test_emoji_sequences_survive(self) -> None:
+        family = "\U0001F468\u200d\U0001F469\u200d\U0001F467"
+        heart = "\u2764\ufe0f"
+        text = f"hi {family} and {heart} ok\u200b"
+        out, rep = strip_hidden_characters(text)
+        self.assertEqual(out, f"hi {family} and {heart} ok")
+        self.assertEqual(rep["removed"], 1)
+
+    def test_clean_text_reports_zero(self) -> None:
+        out, rep = strip_hidden_characters("Plain text, with \u201ccurly quotes\u201d and \u2014 dashes.")
+        self.assertEqual(out, "Plain text, with \u201ccurly quotes\u201d and \u2014 dashes.")
+        self.assertEqual(rep, {"removed": 0, "replaced": 0, "by_category": {}})
+
+    def test_detector_reports_zero_anomalies_afterwards(self) -> None:
+        dirty = "Th\u200bis has\u00a0odd sp\u2003aces and p\u0430ypal and a \u00adsoft one."
+        self.assertGreater(detect_unicode_and_homoglyphs(dirty)["unicode_anomaly_count"], 0)
+        clean, _ = strip_hidden_characters(dirty)
+        res = detect_unicode_and_homoglyphs(clean)
+        self.assertEqual(res["unicode_anomaly_count"], 0)
+        self.assertEqual(res["homoglyph_count"], 0)
+
+    def test_rewrite_text_cleans_with_single_provider_call(self) -> None:
+        draft = "I had a quick look at the plan today. It reads f\u200bine to me, and the p\u0430rts I checked add up."
+        stub = MagicMock(return_value=(draft, "stub-llm"))
+        with patch("engine.rewriter._call_llm_provider", stub):
+            res = rewrite_text(
+                "I looked at the plan today and it seems fine.",
+                context_mode="casual_chat",
+                intensity="natural",
+                save_history=False,
+                db_path=self.db_path,
+            )
         self.assertEqual(stub.call_count, 1)
-        self.assertEqual(res["repair_rounds"], 0)
+        self.assertEqual(res["hidden_characters"]["removed"], 1)
+        self.assertEqual(res["hidden_characters"]["replaced"], 1)
+        self.assertEqual(detect_unicode_and_homoglyphs(res["rewritten"])["unicode_anomaly_count"], 0)
+        self.assertEqual(detect_unicode_and_homoglyphs(res["rewritten"])["homoglyph_count"], 0)
+        self.assertIn("fine", res["rewritten"])
+        self.assertNotIn("repair_rounds", res)
 
-    def test_repair_rounds_clamped_to_three(self) -> None:
-        res, stub = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT] * 9, rewrite_max_repair_rounds=99)
-        self.assertEqual(stub.call_count, 4)
-        self.assertEqual(res["repair_rounds"], 3)
+    def test_rewrite_text_empty_input_has_hidden_characters_zeros(self) -> None:
+        res = rewrite_text("  ", save_history=False, db_path=self.db_path)
+        self.assertEqual(res["hidden_characters"], {"removed": 0, "replaced": 0, "by_category": {}})
 
-    def test_provider_failure_stops_loop_early(self) -> None:
-        res, stub = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT, None])
-        self.assertEqual(stub.call_count, 2)
-        self.assertEqual(res["repair_rounds"], 0)
 
-    def test_floor_beats_worse_llm_draft(self) -> None:
-        res, _ = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT], rewrite_max_repair_rounds=0)
-        self.assertEqual(res["provider_used"], "local-dna-engine (fallback)")
-        self.assertIn("password manager", res["rewritten"])
+class TestPangramAgreement(BaseEngineTestCase):
+    """Offline agreement between stored Pangram scans and the in-house estimate (synthetic rows only)."""
+
+    HUMANISH = (
+        "Honestly, I'd just keep the setup simple. Shared accounts get a password manager, and that's it. "
+        "Quick jobs? Automate them. The older tool cost more every month, so we dropped it and when something "
+        "breaks there's one person to call."
+    )
+
+    def _add(self, scan_type: str, text: str, fraction_ai: float) -> None:
+        with get_connection(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO pangram_scans (scan_type, title, input_text, word_count, headline, fraction_ai, result_json, created_at)"
+                " VALUES (?, 't', ?, ?, 'h', ?, '{}', '2026-01-01')",
+                (scan_type, text, len(text.split()), fraction_ai),
+            )
+            conn.commit()
+
+    def test_agree_disagree_and_ignored_rows(self) -> None:
+        init_db(self.db_path)
+        in_house_ai = float(analyze_text(DEAI_FIXTURE)["human_score"]) < 50
+        self.assertTrue(in_house_ai)
+        self._add("text", DEAI_FIXTURE, 1.0)  # agree: both AI
+        self._add("text", self.HUMANISH, 0.0)  # agree: both human
+        self._add("file", self.HUMANISH, 1.0)  # disagree
+        self._add("inhouse", DEAI_FIXTURE, 0.0)  # in-house row: ignored
+        self._add("plagiarism", DEAI_FIXTURE, 0.0)  # not an AI verdict: ignored
+        self._add("text", "too short", 1.0)  # under 50 chars: skipped
+        res = pangram_agreement(self.db_path)
+        self.assertEqual((res["scans"], res["agree"]), (3, 2))
+        self.assertAlmostEqual(res["rate"], 2 / 3)
+        self.assertEqual(len(res["disagreements"]), 1)
+        d = res["disagreements"][0]
+        self.assertEqual(set(d), {"id", "pangram_fraction_ai", "inhouse_human_score"})
+        self.assertEqual(d["pangram_fraction_ai"], 1.0)
+        self.assertNotIn("password manager", json.dumps(res))
+
+    def test_no_scans_gives_none_rate(self) -> None:
+        res = pangram_agreement(self.db_path)
+        self.assertEqual(res, {"scans": 0, "agree": 0, "rate": None, "disagreements": []})
 
 
 class TestGrowWithMeLearningLoop(BaseEngineTestCase):

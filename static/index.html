@@ -90,7 +90,7 @@
         <!-- Update button -->
         <button type="button" class="btn btn-secondary btn-sm" id="btn-check-update" title="Check GitHub for VoicePrint updates">
           <span class="update-dot" id="update-btn-dot" style="display: none;"></span>
-          <span id="update-btn-label">v1.2.5 · Update</span>
+          <span id="update-btn-label">v1.2.6 · Update</span>
         </button>
 
         <!-- Settings button -->
@@ -212,7 +212,7 @@
                 <div class="metrics-row">
                   <!-- Human Score Gauge -->
                   <div class="metric-box">
-                    <div class="metric-label">Human Score</div>
+                    <div class="metric-label" title="VoicePrint's own offline estimate. Not a Pangram result.">In-house estimate</div>
                     <div class="metric-score-row">
                       <span class="metric-value font-mono" id="val-human-score">--</span>
                       <span class="metric-unit">/100</span>
@@ -359,18 +359,21 @@
                   </div>
                 </div>
               </div>
+              <div class="text-muted text-sm" id="hidden-chars-line" style="display: none;"></div>
 
               <!-- Before -> After Comparison Drawer -->
               <div class="comparison-panel" id="output-comparison-panel">
                 <div class="comparison-grid">
                   <div class="comp-box">
-                    <div class="comp-label">Human Score Delta</div>
+                    <div class="comp-label" title="VoicePrint's own offline estimate. Not a Pangram result.">In-house estimate</div>
                     <div class="comp-stat-row">
                       <span class="comp-before font-mono" id="comp-human-before">--</span>
                       <span class="comp-arrow">→</span>
                       <span class="comp-after font-mono text-emerald" id="comp-human-after">--</span>
                       <span class="comp-badge badge-emerald" id="comp-human-delta">+0</span>
                     </div>
+                    <div class="text-muted text-sm">VoicePrint's own offline estimate. Not a Pangram result.</div>
+                    <div class="text-muted text-sm" id="pangram-agreement-line" style="display: none;"></div>
                   </div>
 
                   <div class="comp-box">

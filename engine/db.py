@@ -35,7 +35,6 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "openrouter_rewrite_model": "google/gemini-2.5-flash",
     "ai_detect_regen_models": "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash",
     "ai_detect_arbiter_model": "google/gemini-2.5-flash",
-    "rewrite_max_repair_rounds": "2",
 }
 
 
