@@ -113,10 +113,6 @@ def calibrate_report(
             hum_score = max(hum_score, 0.72)
             raw_ai = max(raw_ai, 0.72)
 
-        # Short-text conservative clamping (< 300 words): pull borderline predictions slightly toward 0.35
-        if low_word_count_warning and 0.38 <= raw_ai <= 0.68 and int(sty.get("homoglyph_count") or 0) == 0:
-            raw_ai = 0.75 * raw_ai + 0.25 * 0.35
-
         raw_ai = round(min(1.0, max(0.0, raw_ai)), 4)
         hum_score = round(min(1.0, max(0.0, hum_score)), 4)
         is_humanized = bool(arb.get("is_humanized", False)) or hum_score >= 0.55
@@ -126,11 +122,11 @@ def calibrate_report(
         if hum_score > max_humanizer_score:
             max_humanizer_score = hum_score
 
-        if raw_ai >= 0.72:
+        if raw_ai >= 0.65:
             label = "AI"
             num_ai += 1
             weighted_ai_words += seg.word_count
-        elif raw_ai >= 0.42:
+        elif raw_ai >= 0.38:
             label = "AI-Assisted"
             num_assisted += 1
             weighted_assisted_words += seg.word_count

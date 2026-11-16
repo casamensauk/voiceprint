@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -25,13 +26,22 @@ class InHouseDetectorError(Exception):
         self.status_code = status_code
 
 
+def _is_ollama_up(ollama_url: str) -> bool:
+    try:
+        req = urllib.request.Request(f"{ollama_url.rstrip('/')}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=0.35) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def resolve_openrouter_config(
     settings: dict[str, str] | None = None,
     override_api_key: str = "",
 ) -> dict[str, str]:
-    """Resolve OpenRouter API key, base URL, and model selection from settings or env."""
+    """Resolve active LLM config: OpenRouter first, falling back to configured Gemini/OpenAI/Anthropic/Ollama."""
     cfg = settings or {}
-    api_key = (
+    openrouter_key = (
         override_api_key.strip()
         or (cfg.get("openrouter_api_key") or "").strip()
         or (os.environ.get("OPENROUTER_API_KEY") or "").strip()
@@ -51,8 +61,58 @@ def resolve_openrouter_config(
         or (os.environ.get("AI_DETECT_ARBITER_MODEL") or "").strip()
         or DEFAULT_ARBITER_MODEL
     )
+
+    if openrouter_key:
+        return {
+            "provider": "openrouter",
+            "api_key": openrouter_key,
+            "base_url": base_url,
+            "regen_models": regen_models,
+            "arbiter_model": arbiter_model,
+        }
+
+    # Automatic multi-provider fallback when user already saved Gemini / OpenAI / Anthropic / Ollama
+    if (cfg.get("gemini_api_key") or "").strip():
+        gm = (cfg.get("gemini_model") or "gemini-2.5-flash").strip()
+        return {
+            "provider": "gemini",
+            "api_key": cfg["gemini_api_key"].strip(),
+            "base_url": "",
+            "regen_models": gm,
+            "arbiter_model": gm,
+        }
+    if (cfg.get("openai_api_key") or "").strip():
+        om = (cfg.get("openai_model") or "gpt-4o-mini").strip()
+        return {
+            "provider": "openai",
+            "api_key": cfg["openai_api_key"].strip(),
+            "base_url": "",
+            "regen_models": om,
+            "arbiter_model": om,
+        }
+    if (cfg.get("anthropic_api_key") or "").strip():
+        am = (cfg.get("anthropic_model") or "claude-3-5-haiku-latest").strip()
+        return {
+            "provider": "anthropic",
+            "api_key": cfg["anthropic_api_key"].strip(),
+            "base_url": "",
+            "regen_models": am,
+            "arbiter_model": am,
+        }
+    ollama_url = (cfg.get("ollama_url") or "http://localhost:11434").strip()
+    if (cfg.get("provider") == "ollama") and _is_ollama_up(ollama_url):
+        ol_model = (cfg.get("ollama_model") or "llama3.2").strip()
+        return {
+            "provider": "ollama",
+            "api_key": "ollama",
+            "base_url": ollama_url,
+            "regen_models": ol_model,
+            "arbiter_model": ol_model,
+        }
+
     return {
-        "api_key": api_key,
+        "provider": "openrouter",
+        "api_key": "",
         "base_url": base_url,
         "regen_models": regen_models,
         "arbiter_model": arbiter_model,
@@ -60,8 +120,12 @@ def resolve_openrouter_config(
 
 
 def _build_cache_key(text: str, cfg: dict[str, str], use_openrouter: bool) -> str:
-    mode_tag = "ensemble" if (use_openrouter and cfg["api_key"]) else "offline_v1"
-    raw = f"{mode_tag}|{cfg['regen_models']}|{cfg['arbiter_model']}|{text}"
+    mode_tag = (
+        f"ensemble_{cfg['provider']}"
+        if (use_openrouter and cfg["api_key"])
+        else "offline_v2"
+    )
+    raw = f"v2_1|{mode_tag}|{cfg['regen_models']}|{cfg['arbiter_model']}|{text}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -102,9 +166,8 @@ def analyze_text_for_ai(
     if use_openrouter and cfg["api_key"]:
         dna_by_idx = run_dna_regeneration(
             segments=segments,
-            api_key=cfg["api_key"],
-            base_url=cfg["base_url"],
             regen_models_csv=cfg["regen_models"],
+            provider_cfg=cfg,
         )
         for d in dna_by_idx.values():
             total_tokens += int(d.get("tokens") or 0)
@@ -114,15 +177,14 @@ def analyze_text_for_ai(
             segments=segments,
             stylometrics_by_idx=stylometrics_by_idx,
             dna_by_idx=dna_by_idx,
-            api_key=cfg["api_key"],
-            base_url=cfg["base_url"],
             arbiter_model=cfg["arbiter_model"],
+            provider_cfg=cfg,
         )
         total_tokens += int(arbiter_res.get("tokens") or 0)
         total_cost += float(arbiter_res.get("cost_usd") or 0.0)
 
     model_desc = (
-        f"inhouse-3stage ({cfg['arbiter_model']})"
+        f"inhouse-3stage ({cfg['provider']}: {cfg['arbiter_model']})"
         if (dna_by_idx or arbiter_res)
         else "inhouse-forensic-stage1"
     )

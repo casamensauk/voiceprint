@@ -128,6 +128,24 @@ def segment_document(
             )
         )
 
+    # Merge short trailing body window (< 45 words) into the preceding body segment
+    # so cadence/lexical heuristics have enough sentences to evaluate reliably.
+    if len(segments) >= 2 and segments[-1].word_count < 45:
+        last_seg = segments.pop()
+        prev_seg = segments[-1]
+        merged_start = prev_seg.start_index
+        merged_end = last_seg.end_index
+        merged_sents = list(prev_seg.sentences) + list(last_seg.sentences)
+        segments[-1] = PreprocessedSegment(
+            text=text[merged_start:merged_end],
+            start_index=merged_start,
+            end_index=merged_end,
+            word_count=prev_seg.word_count + last_seg.word_count,
+            sentence_count=len(merged_sents),
+            is_excluded_reference=False,
+            sentences=merged_sents,
+        )
+
     if ref_text.strip() and ref_start is not None:
         r_start = ref_start
         r_end = len(text)

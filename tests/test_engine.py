@@ -48,6 +48,7 @@ from engine.ai_detector import (
     scan_file_inhouse,
 )
 from engine.ai_detector.calibrator import calibrate_report
+from engine.ai_detector.orchestrator import resolve_openrouter_config
 from engine.ai_detector.preprocessor import PreprocessedSegment, segment_document
 from engine.ai_detector.stylometrics import (
     detect_unicode_and_homoglyphs,
@@ -1134,6 +1135,47 @@ class TestInHouseAiDetector(BaseEngineTestCase):
         self.assertIn("fraction_ai", res)
         self.assertIn("fraction_human", res)
         self.assertGreaterEqual(len(res["windows"]), 1)
+
+    def test_modern_cliche_free_ai_vs_genuine_human(self) -> None:
+        """Modern RLHF AI prose without 2023 clichés scores >=0.80 AI, while human casual & cited academic stay 0.0."""
+        modern_ai = (
+            "Effective remote collaboration relies on clear communication norms and well-defined project milestones. "
+            "When distributed teams establish shared expectations around response times and documentation, daily handoffs become much more predictable. "
+            "Instead of relying on constant synchronous meetings, high-performing organizations document key decisions in centralized workspaces where everyone can review context asynchronously.\n\n"
+            "At the same time, maintaining team cohesion requires intentional space for informal connection. "
+            "Short check-ins, clear ownership of deliverables, and regular retrospectives help surface blockers early before they compound into larger delays. "
+            "Ultimately, balancing structured asynchronous workflows with purposeful human interaction enables remote teams to sustain both velocity and morale over the long term."
+        )
+        res_ai = analyze_text_for_ai(modern_ai, use_openrouter=False, bypass_cache=True, db_path=self.db_path)
+        self.assertGreaterEqual(res_ai["fraction_ai"], 0.80)
+        self.assertEqual(res_ai["headline"], "Likely AI-Generated")
+
+        casual_human = (
+            "Honestly I had no idea the script would take that long to run. Wait, why did it hang on port 8765? "
+            "Turns out Slack Dashboard was already sitting there! Let's just switch the default port to 18940 and add a health check so we never open the wrong tab again. Pretty wild catch tbh."
+        )
+        res_casual = analyze_text_for_ai(casual_human, use_openrouter=False, bypass_cache=True, db_path=self.db_path)
+        self.assertEqual(res_casual["fraction_ai"], 0.0)
+        self.assertEqual(res_casual["fraction_ai_assisted"], 0.0)
+        self.assertEqual(res_casual["headline"], "Likely Human")
+
+        empirical_academic = (
+            "We tested 240 undergraduate participants across two sessions in 2024 (Smith & Patel, 2023; n = 240, p < 0.01). "
+            "Why did response accuracy drop sharply on trial four? Fatigue explains part of it. "
+            "Still, once stimulus latency exceeded 450 ms, error rates climbed by 18.4% while reaction times stayed flat across older cohorts (Jones et al., 2021)."
+        )
+        res_acad = analyze_text_for_ai(empirical_academic, use_openrouter=False, bypass_cache=True, db_path=self.db_path)
+        self.assertEqual(res_acad["fraction_ai"], 0.0)
+
+    def test_multi_provider_detector_fallback(self) -> None:
+        """When OpenRouter key is blank, resolve_openrouter_config falls back to configured Gemini/OpenAI/Anthropic."""
+        cfg_gemini = resolve_openrouter_config({"gemini_api_key": "gm-test-key", "gemini_model": "gemini-2.5-flash"})
+        self.assertEqual(cfg_gemini["provider"], "gemini")
+        self.assertEqual(cfg_gemini["api_key"], "gm-test-key")
+
+        cfg_openai = resolve_openrouter_config({"openai_api_key": "sk-openai-test", "openai_model": "gpt-4o-mini"})
+        self.assertEqual(cfg_openai["provider"], "openai")
+        self.assertEqual(cfg_openai["api_key"], "sk-openai-test")
 
 
 class TestAutoUpdater(BaseEngineTestCase):

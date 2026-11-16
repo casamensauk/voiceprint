@@ -1,11 +1,16 @@
-"""Stage 3: OpenRouter structured JSON synthesis & AI-humanizer detector."""
+"""Stage 3: Structured JSON synthesis & AI-humanizer detector (OpenRouter + multi-LLM fallback)."""
 
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from .dna_regeneration import DEFAULT_OPENROUTER_URL, OpenRouterError, openrouter_chat_completion
+from .dna_regeneration import (
+    DEFAULT_OPENROUTER_URL,
+    OpenRouterError,
+    call_provider_chat,
+    openrouter_chat_completion,
+)
 from .preprocessor import PreprocessedSegment
 
 DEFAULT_ARBITER_MODEL = "google/gemini-2.5-flash"
@@ -55,12 +60,16 @@ def run_arbiter_synthesis(
     segments: list[PreprocessedSegment],
     stylometrics_by_idx: dict[int, dict[str, Any]],
     dna_by_idx: dict[int, dict[str, Any]],
-    api_key: str,
+    api_key: str = "",
     base_url: str = DEFAULT_OPENROUTER_URL,
     arbiter_model: str = DEFAULT_ARBITER_MODEL,
+    provider_cfg: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Synthesize forensic stylometrics + DNA-GPT evidence via structured JSON arbitration."""
-    if not api_key.strip():
+    cfg = provider_cfg or {"provider": "openrouter", "api_key": api_key, "base_url": base_url}
+    provider = cfg.get("provider", "openrouter")
+    eff_key = (cfg.get("api_key") or "").strip()
+    if provider != "ollama" and not eff_key:
         return {}
 
     evidence_blocks: list[dict[str, Any]] = []
@@ -95,48 +104,57 @@ def run_arbiter_synthesis(
         return {}
 
     system_prompt = (
-        "You are an academic forensics arbiter synthesizing multi-signal evidence for AI authorship and AI-humanizer scrubbing.\n"
-        "CRITICAL GUIDELINES:\n"
-        "1. NEVER rely on formality alone to flag text as AI. Formal academic or technical prose with low DNA-GPT BScore (< 0.35) "
-        "and zero homoglyph/watermark tampering is very often HUMAN.\n"
-        "2. Weigh Stage 2 DNA-GPT BScore heavily: high BScore (>= 0.55) indicates strong LLM continuation alignment.\n"
-        "3. Detect AI-Humanizer evasion (is_humanized=true, humanizer_score 0.0-1.0) when you observe awkward thesaurus swaps, "
-        "mixed-script homoglyphs, invisible Unicode watermarks, or uniform AI structure masked by forced contractions.\n"
-        "4. Return strict JSON matching the schema with ai_score in [0.0, 1.0], humanizer_score in [0.0, 1.0], and 1-3 concise forensic reasons per window."
+        "You are a forensic authorship arbiter synthesizing Stage 1 stylometrics, Stage 2 DNA-GPT continuation BScore, "
+        "and discourse structure to estimate AI authorship and AI-humanizer scrubbing.\n"
+        "EVALUATION GUIDELINES:\n"
+        "1. Look closely for modern RLHF prose signatures even when classic 2023 clichés ('delve', 'tapestry') are absent: "
+        "frictionless 'Topic -> Elaboration -> At the same time -> Ultimately/Overall' symmetry, participial openers ('Instead of ...ing'), "
+        "parallel 'X, Y, and Z' triads, abstract nominalizations, and 'enables/allows X to Y' boilerplate.\n"
+        "2. Weigh Stage 1 stylometrics and Stage 2 DNA-GPT BScore together objectively: high BScore (>= 0.55) OR strong RLHF scaffolding + "
+        "uniform nominalized phrasing supports higher ai_score.\n"
+        "3. Protect genuine human writing when you observe real-world specificity (concrete dates, citations, measurements, lived idiosyncrasies, "
+        "personal voice/contractions, sharp burstiness variation) and low RLHF scaffolding.\n"
+        "4. Detect AI-Humanizer evasion (is_humanized=true, humanizer_score 0.0-1.0) on awkward thesaurus swaps, mixed-script homoglyphs, "
+        "invisible Unicode watermarks, or uniform AI syntax masked with forced contractions.\n"
+        "5. Return strict JSON with overall_summary and windows[{window_index, ai_score, is_humanized, humanizer_score, reasons}]."
     )
     user_prompt = json.dumps({"windows_evidence": evidence_blocks}, ensure_ascii=False)
 
-    model = (arbiter_model or DEFAULT_ARBITER_MODEL).strip()
+    model = (arbiter_model or cfg.get("arbiter_model") or DEFAULT_ARBITER_MODEL).strip()
     resp: dict[str, Any] = {}
-    try:
-        resp = openrouter_chat_completion(
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.15,
-            max_tokens=1200,
-            response_format=_ARBITER_JSON_SCHEMA,
-            timeout_s=28.0,
-        )
-    except OpenRouterError:
-        try:
-            resp = openrouter_chat_completion(
-                api_key=api_key,
-                base_url=base_url,
+
+    def _invoke(fmt: dict[str, Any] | None, extra_sys: str = "") -> dict[str, Any]:
+        msgs = [
+            {"role": "system", "content": system_prompt + extra_sys},
+            {"role": "user", "content": user_prompt},
+        ]
+        if provider == "openrouter":
+            return openrouter_chat_completion(
+                api_key=eff_key,
+                base_url=cfg.get("base_url") or DEFAULT_OPENROUTER_URL,
                 model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt + "\nReturn a JSON object."},
-                    {"role": "user", "content": user_prompt},
-                ],
+                messages=msgs,
                 temperature=0.15,
                 max_tokens=1200,
-                response_format={"type": "json_object"},
+                response_format=fmt,
                 timeout_s=28.0,
             )
+        return call_provider_chat(
+            provider_cfg=cfg,
+            model=model,
+            messages=msgs,
+            temperature=0.15,
+            max_tokens=1200,
+            response_format=fmt,
+            timeout_s=28.0,
+        )
+
+    try:
+        fmt_primary = _ARBITER_JSON_SCHEMA if provider in ("openrouter", "openai") else {"type": "json_object"}
+        resp = _invoke(fmt_primary)
+    except OpenRouterError:
+        try:
+            resp = _invoke({"type": "json_object"}, extra_sys="\nReturn ONLY a valid JSON object matching the schema.")
         except OpenRouterError:
             return {}
 
