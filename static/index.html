@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoicePrint — Zero-Inference Clipboard Rewriter</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="dark-theme">
+  <!-- App Container -->
+  <div class="app-layout">
+    
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="brand-logo">
+          <svg class="logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="32" height="32" rx="8" fill="url(#logo-grad)"/>
+            <path d="M7 16C7 11.0294 11.0294 7 16 7C20.9706 7 25 11.0294 25 16" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>
+            <path d="M10 16C10 12.6863 12.6863 10 16 10C19.3137 10 22 12.6863 22 16V20C22 22.2091 20.2091 24 18 24H15" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+            <path d="M13 16C13 14.3431 14.3431 13 16 13C17.6569 13 19 14.3431 19 16V22C19 23.6569 17.6569 25 16 25" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="16" cy="18" r="1.5" fill="#ffffff"/>
+            <defs>
+              <linearGradient id="logo-grad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#7c6cff"/>
+                <stop offset="1" stop-color="#4f46e5"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <div class="brand-text">
+            <div class="brand-title-row">
+              <h1 class="brand-title">VoicePrint</h1>
+              <span class="brand-badge">Local Studio</span>
+            </div>
+            <p class="brand-subtitle">Zero-Inference Clipboard Rewriter</p>
+          </div>
+        </div>
+
+        <!-- Voice Maturity Indicator Badge -->
+        <div class="maturity-badge" id="header-maturity" title="Voice maturity is trained via uploaded samples and your final edited tweaks">
+          <div class="maturity-header">
+            <span class="maturity-dot pulse-emerald"></span>
+            <span class="maturity-label" id="maturity-label">Growing Twin</span>
+            <span class="maturity-score" id="maturity-score">58%</span>
+          </div>
+          <div class="maturity-progress-track">
+            <div class="maturity-progress-bar" id="maturity-bar" style="width: 58%;"></div>
+          </div>
+          <div class="maturity-meta">
+            <span id="maturity-samples-count">0 samples</span>
+            <span class="meta-sep">•</span>
+            <span id="maturity-gold-count" class="gold-text">0 gold edits</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-center">
+        <!-- Context Mode Switcher Pills -->
+        <nav class="context-mode-bar" aria-label="Context Modes">
+          <button type="button" class="mode-pill active" data-mode="casual_chat" id="mode-casual_chat">
+            <svg class="mode-icon" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z"/>
+              <path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z"/>
+            </svg>
+            <span>Casual Chat</span>
+          </button>
+          <button type="button" class="mode-pill" data-mode="work_email" id="mode-work_email">
+            <svg class="mode-icon" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z"/>
+              <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z"/>
+            </svg>
+            <span>Work Email</span>
+          </button>
+          <button type="button" class="mode-pill" data-mode="long_form" id="mode-long_form">
+            <svg class="mode-icon" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clip-rule="evenodd"/>
+            </svg>
+            <span>Long-Form</span>
+          </button>
+          <button type="button" class="mode-pill" data-mode="social_post" id="mode-social_post">
+            <svg class="mode-icon" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M18 13V5a2 2 0 00-2-2H4a2 2 0 00-2 2v8a2 2 0 002 2h3l3 3 3-3h3a2 2 0 002-2zM5 7a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1zm1 3a1 1 0 100 2h5a1 1 0 100-2H6z" clip-rule="evenodd"/>
+            </svg>
+            <span>Social / DM</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="header-right">
+        <!-- Settings button -->
+        <button type="button" class="btn btn-secondary btn-icon" id="btn-open-settings" title="AI Engine & API Keys Configuration">
+          <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+            <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/>
+          </svg>
+          <span>AI Engine Settings</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs Bar -->
+    <nav class="nav-tabs" aria-label="Main Navigation">
+      <button type="button" class="tab-btn active" data-tab="studio" id="tab-nav-studio">
+        <svg viewBox="0 0 20 20" fill="currentColor" class="tab-icon">
+          <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/>
+        </svg>
+        <span>Studio (Rewriter)</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="samples" id="tab-nav-samples">
+        <svg viewBox="0 0 20 20" fill="currentColor" class="tab-icon">
+          <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/>
+          <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"/>
+        </svg>
+        <span>Grow With Me (Samples & Import)</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="dna" id="tab-nav-dna">
+        <svg viewBox="0 0 20 20" fill="currentColor" class="tab-icon">
+          <path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd"/>
+        </svg>
+        <span>Voice DNA & Rules</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="macos" id="tab-nav-macos">
+        <svg viewBox="0 0 20 20" fill="currentColor" class="tab-icon">
+          <path fill-rule="evenodd" d="M3 5a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2h-2.22l.123.489.804.804A1 1 0 0113 18H7a1 1 0 01-.707-1.707l.804-.804L7.22 15H5a2 2 0 01-2-2V5zm5.771 7H5V5h10v7H8.771z" clip-rule="evenodd"/>
+        </svg>
+        <span>macOS Hotkey & CLI</span>
+      </button>
+    </nav>
+
+    <!-- Main Views Container -->
+    <main class="app-main">
+
+      <!-- ======================================================== -->
+      <!-- TAB 1: STUDIO (CLIPBOARD REWRITER) -->
+      <!-- ======================================================== -->
+      <section class="tab-pane active" id="pane-studio">
+        <div class="studio-grid">
+          
+          <!-- Left Column: Source Input Card -->
+          <div class="card studio-card" id="card-source">
+            <div class="card-header">
+              <div class="card-title-group">
+                <span class="card-icon-pill">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                    <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/>
+                  </svg>
+                </span>
+                <div>
+                  <h2 class="card-title">Source / Clipboard Text</h2>
+                  <p class="card-subtitle">Paste drafts or grab directly from macOS clipboard</p>
+                </div>
+              </div>
+              <div class="card-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-grab-clipboard" title="Read clipboard via pbpaste">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
+                    <path d="M8 2a1 1 0 000 2h2a1 1 0 100-2H8z"/>
+                    <path d="M3 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v6h-2V9H4v8h4v2H5a2 2 0 01-2-2V5z"/>
+                  </svg>
+                  <span>Grab macOS Clipboard</span>
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-sample-ai" title="Load an AI-cliché heavy paragraph to test">
+                  <span>Try Sample AI Text</span>
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm text-muted" id="btn-clear-source" title="Clear source text">
+                  <span>Clear</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="textarea-wrapper">
+                <textarea 
+                  id="source-input" 
+                  class="studio-textarea" 
+                  placeholder="Paste AI drafts, emails, or raw text here, or click 'Grab macOS Clipboard'..."
+                  rows="9"
+                  spellcheck="false"
+                ></textarea>
+                <div class="textarea-footer">
+                  <div class="text-counts">
+                    <span id="source-word-count">0 words</span>
+                    <span class="meta-sep">•</span>
+                    <span id="source-char-count">0 chars</span>
+                  </div>
+                  <div class="analysis-status" id="analysis-spinner" style="display: none;">
+                    <span class="mini-spinner"></span>
+                    <span>Scanning AI tells...</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Live Analysis Section -->
+              <div class="analysis-panel" id="source-analysis-panel">
+                <div class="metrics-row">
+                  <!-- Human Score Gauge -->
+                  <div class="metric-box">
+                    <div class="metric-label">Human Score</div>
+                    <div class="metric-score-row">
+                      <span class="metric-value font-mono" id="val-human-score">--</span>
+                      <span class="metric-unit">/100</span>
+                    </div>
+                    <div class="score-bar-bg">
+                      <div class="score-bar-fill fill-emerald" id="bar-human-score" style="width: 0%;"></div>
+                    </div>
+                    <span class="metric-hint" id="hint-human-score">Authentic human cadence</span>
+                  </div>
+
+                  <!-- AI Risk Score Gauge -->
+                  <div class="metric-box">
+                    <div class="metric-label">AI Risk Score</div>
+                    <div class="metric-score-row">
+                      <span class="metric-value font-mono text-rose" id="val-ai-risk">--</span>
+                      <span class="metric-unit">/100</span>
+                    </div>
+                    <div class="score-bar-bg">
+                      <div class="score-bar-fill fill-rose" id="bar-ai-risk" style="width: 0%;"></div>
+                    </div>
+                    <span class="metric-hint" id="hint-ai-risk">Tell density & clichés</span>
+                  </div>
+
+                  <!-- Burstiness Score -->
+                  <div class="metric-box">
+                    <div class="metric-label">Burstiness & Variance</div>
+                    <div class="metric-score-row">
+                      <span class="metric-value font-mono text-indigo" id="val-burstiness">--</span>
+                      <span class="metric-unit">/100</span>
+                    </div>
+                    <div class="score-bar-bg">
+                      <div class="score-bar-fill fill-indigo" id="bar-burstiness" style="width: 0%;"></div>
+                    </div>
+                    <span class="metric-hint" id="hint-burstiness">Rhythmic sentence variety</span>
+                  </div>
+                </div>
+
+                <!-- Sentence-Length Sparkline Visualizer -->
+                <div class="sparkline-wrapper">
+                  <div class="sparkline-header">
+                    <span class="sparkline-title">Sentence-Length Cadence</span>
+                    <span class="sparkline-stats" id="source-cadence-stats">Mean: 0w • StdDev: 0w</span>
+                  </div>
+                  <div class="sparkline-container" id="source-sparkline">
+                    <div class="sparkline-placeholder">Type or paste text to visualize sentence rhythm</div>
+                  </div>
+                </div>
+
+                <!-- Detected AI Clichés & Tells Chips -->
+                <div class="tells-wrapper">
+                  <div class="tells-header">
+                    <div class="tells-title-group">
+                      <span class="tells-title">Detected AI Tells & Clichés</span>
+                      <span class="tells-count-badge" id="tells-count-badge">0 flags</span>
+                    </div>
+                    <span class="tells-hint">VoicePrint automatically strips or humanizes these</span>
+                  </div>
+                  <div class="tells-chips-container" id="ai-tells-container">
+                    <span class="tells-empty">No synthetic clichés detected yet</span>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+
+          <!-- Middle Action Controls -->
+          <div class="studio-action-bar">
+            <div class="intensity-group">
+              <span class="intensity-label">De-AI Intensity:</span>
+              <div class="segmented-control" id="intensity-selector">
+                <button type="button" class="seg-btn" data-intensity="subtle" id="intensity-subtle" title="Removes AI clichés, preserves sentence structure">Subtle</button>
+                <button type="button" class="seg-btn" data-intensity="natural" id="intensity-natural" title="Balanced De-AI + personal Voice DNA cadence">Natural</button>
+                <button type="button" class="seg-btn active" data-intensity="deep" id="intensity-deep" title="Deep humanization: rhythm shift, personal quirks, and replacements">Deep De-AI</button>
+              </div>
+            </div>
+
+            <div class="action-buttons-group">
+              <button type="button" class="btn btn-primary btn-lg" id="btn-rewrite">
+                <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/>
+                </svg>
+                <span id="btn-rewrite-text">Rewrite in My Voice</span>
+                <span class="shortcut-tag">⌘↵</span>
+              </button>
+
+              <button type="button" class="btn btn-emerald btn-lg" id="btn-quick-rewrite" title="Grab clipboard, rewrite in one shot, and copy back to clipboard">
+                <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                  <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/>
+                </svg>
+                <span>1-Click Grab → Rewrite → Copy</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Right Column: Rewritten Output Card -->
+          <div class="card studio-card" id="card-output">
+            <div class="card-header">
+              <div class="card-title-group">
+                <span class="card-icon-pill pill-indigo">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                  </svg>
+                </span>
+                <div>
+                  <h2 class="card-title">Your Voice Output (Editable)</h2>
+                  <p class="card-subtitle">VoicePrint adapts and learns from any tweaks you make here</p>
+                </div>
+              </div>
+              <div class="card-actions">
+                <div class="diff-indicator-badge" id="diff-badge" style="display: none;">
+                  <span class="diff-dot pulse-amber"></span>
+                  <span>Diff detected — VoicePrint will learn from your tweaks on copy</span>
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-only" title="Copy text to clipboard">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
+                    <path d="M7 9a2 2 0 012-2h6a2 2 0 012 2v6a2 2 0 01-2 2H9a2 2 0 01-2-2V9z"/>
+                    <path d="M5 3a2 2 0 00-2 2v6a2 2 0 002 2V5h8a2 2 0 00-2-2H5z"/>
+                  </svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="textarea-wrapper">
+                <textarea 
+                  id="output-text" 
+                  class="studio-textarea output-textarea" 
+                  placeholder="Your humanized rewrite will appear here. Edit it freely — your manual adjustments train VoicePrint instantly!"
+                  rows="9"
+                  spellcheck="false"
+                ></textarea>
+                <div class="textarea-footer">
+                  <div class="text-counts">
+                    <span id="output-word-count">0 words</span>
+                    <span class="meta-sep">•</span>
+                    <span id="output-char-count">0 chars</span>
+                  </div>
+                  <div class="provider-pill" id="provider-pill" style="display: none;">
+                    <span>Engine:</span>
+                    <strong id="provider-name">deterministic_local</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Before -> After Comparison Drawer -->
+              <div class="comparison-panel" id="output-comparison-panel">
+                <div class="comparison-grid">
+                  <div class="comp-box">
+                    <div class="comp-label">Human Score Delta</div>
+                    <div class="comp-stat-row">
+                      <span class="comp-before font-mono" id="comp-human-before">--</span>
+                      <span class="comp-arrow">→</span>
+                      <span class="comp-after font-mono text-emerald" id="comp-human-after">--</span>
+                      <span class="comp-badge badge-emerald" id="comp-human-delta">+0</span>
+                    </div>
+                  </div>
+
+                  <div class="comp-box">
+                    <div class="comp-label">Burstiness Delta</div>
+                    <div class="comp-stat-row">
+                      <span class="comp-before font-mono" id="comp-burst-before">--</span>
+                      <span class="comp-arrow">→</span>
+                      <span class="comp-after font-mono text-indigo" id="comp-burst-after">--</span>
+                      <span class="comp-badge badge-indigo" id="comp-burst-delta">+0</span>
+                    </div>
+                  </div>
+
+                  <div class="comp-box">
+                    <div class="comp-label">Voice DNA Match</div>
+                    <div class="comp-stat-row">
+                      <span class="comp-after font-mono text-emerald" id="comp-dna-match">--%</span>
+                    </div>
+                  </div>
+
+                  <div class="comp-box">
+                    <div class="comp-label">Samples Referenced</div>
+                    <div class="comp-stat-row">
+                      <span class="comp-after font-mono text-muted" id="comp-samples-ref">0</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Output Sparkline -->
+                <div class="sparkline-wrapper">
+                  <div class="sparkline-header">
+                    <span class="sparkline-title">Output Sentence Cadence</span>
+                    <span class="sparkline-stats" id="output-cadence-stats">Mean: 0w • StdDev: 0w</span>
+                  </div>
+                  <div class="sparkline-container" id="output-sparkline">
+                    <div class="sparkline-placeholder">Sentence rhythm for rewritten output will appear here</div>
+                  </div>
+                </div>
+
+                <!-- Primary Action: Copy & Learn -->
+                <div class="learn-action-row">
+                  <button type="button" class="btn btn-emerald btn-lg w-full" id="btn-copy-learn">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                      <path fill-rule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                    </svg>
+                    <span>Copy to Clipboard &amp; Learn from My Edits</span>
+                  </button>
+                </div>
+
+                <!-- Learning Feedback Banner -->
+                <div class="learned-habits-banner" id="learned-habits-banner" style="display: none;">
+                  <div class="banner-header">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="banner-icon text-emerald">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                    </svg>
+                    <span class="banner-title">VoicePrint Trained Instantly!</span>
+                  </div>
+                  <p class="banner-desc">Your edits were saved as 2.5x weighted gold samples, and the following personal habits were learned:</p>
+                  <ul class="learned-habits-list" id="learned-habits-list">
+                    <!-- Populated dynamically via JS -->
+                  </ul>
+                </div>
+
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ======================================================== -->
+      <!-- TAB 2: GROW WITH ME (IMPORT & SAMPLES) -->
+      <!-- ======================================================== -->
+      <section class="tab-pane" id="pane-samples">
+        <div class="view-header">
+          <div>
+            <h2 class="view-title">Grow With Me — Import &amp; Samples</h2>
+            <p class="view-subtitle">The more authentic human writing you upload, the more accurately VoicePrint captures your rhythm, vocabulary, and quirks.</p>
+          </div>
+          <div class="view-actions">
+            <button type="button" class="btn btn-secondary" id="btn-seed-demo">
+              <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                <path d="M5 3a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2H5zM5 11a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2v-2a2 2 0 00-2-2H5zM11 5a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V5zM11 13a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+              </svg>
+              <span>Load Demo Voice Samples</span>
+            </button>
+            <button type="button" class="btn btn-ghost text-rose" id="btn-clear-samples">
+              <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/>
+              </svg>
+              <span>Clear Mode Samples</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="samples-layout">
+          <!-- Bulk Importer Card -->
+          <div class="card import-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <span class="card-icon-pill pill-indigo">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                    <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+                  </svg>
+                </span>
+                <div>
+                  <h3 class="card-title">Bulk Importer</h3>
+                  <p class="card-subtitle">Paste or drag WhatsApp, Discord, Slack, sent emails, or documents</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <form id="import-form">
+                <div class="form-row form-grid-3">
+                  <div class="form-group">
+                    <label for="import-format" class="form-label">Source Format</label>
+                    <select id="import-format" class="form-select">
+                      <option value="auto">Auto-Detect Format</option>
+                      <option value="whatsapp">WhatsApp Chat Export (.txt)</option>
+                      <option value="discord_slack">Discord / Slack Export (.txt, .json)</option>
+                      <option value="email">Email Thread / Sent Mail (.txt, .eml)</option>
+                      <option value="csv">CSV Messages / Table (.csv)</option>
+                      <option value="document">Plain Document / Notes</option>
+                    </select>
+                  </div>
+
+                  <div class="form-group">
+                    <label for="import-mode" class="form-label">Target Context Mode</label>
+                    <select id="import-mode" class="form-select">
+                      <option value="casual_chat">Casual Chat</option>
+                      <option value="work_email">Work Email</option>
+                      <option value="long_form">Long-Form</option>
+                      <option value="social_post">Social / DM</option>
+                    </select>
+                  </div>
+
+                  <div class="form-group">
+                    <label for="import-sender" class="form-label">Your Name in Chat <span class="text-muted">(Optional)</span></label>
+                    <input type="text" id="import-sender" class="form-input" placeholder="e.g. Alex, Simon">
+                    <span class="field-hint">Filters group chats to only your outgoing messages</span>
+                  </div>
+                </div>
+
+                <!-- Drag & Drop Zone -->
+                <div class="dropzone" id="import-dropzone">
+                  <input type="file" id="file-picker" accept=".txt,.md,.json,.csv,.eml" style="display: none;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" class="dropzone-icon">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                  </svg>
+                  <p class="dropzone-text">Drag and drop chat export file here, or <button type="button" class="btn-link" id="btn-browse-file">browse files</button></p>
+                  <p class="dropzone-hint">Supports .txt, .md, .json, .csv, and .eml</p>
+                </div>
+
+                <!-- Textarea for raw paste -->
+                <div class="form-group mt-3">
+                  <label for="import-text" class="form-label">Or Paste Raw Content Directly</label>
+                  <textarea id="import-text" class="form-textarea" rows="6" placeholder="Paste exported conversation lines, notes, or email threads here..."></textarea>
+                </div>
+
+                <div class="import-actions-row">
+                  <button type="submit" class="btn btn-primary" id="btn-submit-import">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                      <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+                    </svg>
+                    <span>Import Samples</span>
+                  </button>
+                  <span class="import-feedback" id="import-feedback"></span>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- Stored Samples List -->
+          <div class="card samples-list-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <span class="card-icon-pill">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                    <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clip-rule="evenodd"/>
+                  </svg>
+                </span>
+                <div>
+                  <h3 class="card-title">Stored Voice Samples</h3>
+                  <p class="card-subtitle" id="samples-subtitle">Showing samples for active context mode</p>
+                </div>
+              </div>
+              <div class="card-actions">
+                <input type="text" id="samples-search" class="form-input form-input-sm" placeholder="Filter samples...">
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="samples-scroll-list" id="samples-list-container">
+                <!-- Dynamically populated sample items -->
+                <div class="samples-empty">No writing samples found. Upload some above or click 'Load Demo Voice Samples'!</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ======================================================== -->
+      <!-- TAB 3: VOICE DNA & LEARNED RULES -->
+      <!-- ======================================================== -->
+      <section class="tab-pane" id="pane-dna">
+        <div class="view-header">
+          <div>
+            <h2 class="view-title">Voice DNA &amp; Learned Rules</h2>
+            <p class="view-subtitle">Quantitative cadence metrics, extracted habits, and custom vocabulary preferences for <strong id="dna-active-mode-title" class="text-indigo">Casual Chat</strong>.</p>
+          </div>
+        </div>
+
+        <div class="dna-layout">
+          <!-- Voice DNA Quantitative Metrics Grid -->
+          <div class="dna-metrics-grid">
+            <div class="dna-card">
+              <div class="dna-card-header">
+                <span class="dna-card-title">Sentence Cadence</span>
+                <span class="dna-pill">Length &amp; Rhythm</span>
+              </div>
+              <div class="dna-stat-big font-mono">
+                <span id="dna-avg-len">--</span> <span class="dna-stat-unit">words/sen</span>
+              </div>
+              <div class="dna-meta-row">
+                <span>Std Deviation:</span>
+                <strong id="dna-std-len" class="font-mono">-- words</strong>
+              </div>
+              <p class="dna-desc">AI writes with flat 15-20w sentences; VoicePrint mirrors your natural standard deviation.</p>
+            </div>
+
+            <div class="dna-card">
+              <div class="dna-card-header">
+                <span class="dna-card-title">Contraction Usage</span>
+                <span class="dna-pill">Informality</span>
+              </div>
+              <div class="dna-stat-big font-mono">
+                <span id="dna-contraction-rate">--%</span>
+              </div>
+              <div class="dna-meta-row">
+                <span>Target:</span>
+                <span class="text-emerald" id="dna-contraction-hint">Natural conversational flow</span>
+              </div>
+              <p class="dna-desc">Automatically contracts "do not" -> "don't", "it is" -> "it's" based on your habits.</p>
+            </div>
+
+            <div class="dna-card">
+              <div class="dna-card-header">
+                <span class="dna-card-title">Casing &amp; Quirks</span>
+                <span class="dna-pill">Personal Habits</span>
+              </div>
+              <div class="dna-sub-stats">
+                <div class="dna-sub-item">
+                  <span class="dna-sub-label">Lowercase Starts:</span>
+                  <strong class="font-mono" id="dna-lower-start">--%</strong>
+                </div>
+                <div class="dna-sub-item">
+                  <span class="dna-sub-label">Lowercase 'i':</span>
+                  <strong class="font-mono" id="dna-lower-i">--%</strong>
+                </div>
+                <div class="dna-sub-item">
+                  <span class="dna-sub-label">Drop Trailing Period:</span>
+                  <strong class="font-mono" id="dna-no-period">--%</strong>
+                </div>
+              </div>
+              <p class="dna-desc">Captures your exact casual messaging casing without awkward robot capitalization.</p>
+            </div>
+
+            <div class="dna-card">
+              <div class="dna-card-header">
+                <span class="dna-card-title">Punctuation Signature</span>
+                <span class="dna-pill">Per 100 Words</span>
+              </div>
+              <div class="dna-sub-stats" id="dna-punct-breakdown">
+                <div class="dna-sub-item">
+                  <span class="dna-sub-label">Em-Dash (—):</span>
+                  <strong class="font-mono" id="dna-punct-emdash">0.0</strong>
+                </div>
+                <div class="dna-sub-item">
+                  <span class="dna-sub-label">Commas:</span>
+                  <strong class="font-mono" id="dna-punct-comma">0.0</strong>
+                </div>
+                <div class="dna-sub-item">
+                  <span class="dna-sub-label">Exclamations (!):</span>
+                  <strong class="font-mono" id="dna-punct-excl">0.0</strong>
+                </div>
+              </div>
+              <p class="dna-desc">Strips robotic em-dashes and colon-bullets if absent in your personal writing.</p>
+            </div>
+          </div>
+
+          <!-- Openers, Slang & Directives -->
+          <div class="card dna-profile-card">
+            <div class="card-header">
+              <h3 class="card-title">Extracted Style Profile &amp; Directives</h3>
+            </div>
+            <div class="card-body">
+              <div class="dna-sections-grid">
+                <div>
+                  <h4 class="dna-section-heading">Frequent Openers</h4>
+                  <div class="tag-cloud" id="dna-openers-cloud">
+                    <span class="text-muted">No openers detected yet</span>
+                  </div>
+                </div>
+                <div>
+                  <h4 class="dna-section-heading">Habitual Slang &amp; Fillers</h4>
+                  <div class="tag-cloud" id="dna-slang-cloud">
+                    <span class="text-muted">No slang markers detected yet</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-4">
+                <h4 class="dna-section-heading">Active Engine Directives</h4>
+                <ul class="directives-list" id="dna-directives-list">
+                  <!-- Dynamically populated -->
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Learned & Custom Replacements Card -->
+          <div class="card rules-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <span class="card-icon-pill pill-indigo">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                    <path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633z" clip-rule="evenodd"/>
+                  </svg>
+                </span>
+                <div>
+                  <h3 class="card-title">Learned &amp; Custom Replacements</h3>
+                  <p class="card-subtitle">Exact word swaps learned from your edits or defined by you</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <!-- Add Rule Form -->
+              <form id="add-rule-form" class="rule-add-form">
+                <div class="form-row form-grid-3">
+                  <div class="form-group">
+                    <label for="rule-avoid" class="form-label">Avoid / AI Cliché</label>
+                    <input type="text" id="rule-avoid" class="form-input" placeholder="e.g. delve into, game changer" required>
+                  </div>
+                  <div class="form-group">
+                    <label for="rule-prefer" class="form-label">Prefer My Phrasing</label>
+                    <input type="text" id="rule-prefer" class="form-input" placeholder="e.g. dig into (leave empty to trim)">
+                  </div>
+                  <div class="form-group form-action-align">
+                    <button type="submit" class="btn btn-primary">
+                      <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                        <path fill-rule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clip-rule="evenodd"/>
+                      </svg>
+                      <span>Add Rule</span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+
+              <!-- Rules Table -->
+              <div class="table-responsive">
+                <table class="data-table" id="rules-table">
+                  <thead>
+                    <tr>
+                      <th>Avoid / AI Cliché</th>
+                      <th>Prefer My Phrasing</th>
+                      <th>Source</th>
+                      <th>Times Seen</th>
+                      <th class="text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="rules-table-body">
+                    <!-- Populated dynamically -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Final-Edit Learning Diff Pairs & History -->
+          <div class="history-grid">
+            <!-- Edit Pairs (Learning Log) -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">Recent Final-Edit Learning Pairs</h3>
+              </div>
+              <div class="card-body">
+                <div class="edit-pairs-list" id="edit-pairs-container">
+                  <div class="text-muted text-sm">No final-edit diff pairs recorded yet. Edit any rewritten draft and click "Copy to Clipboard & Learn from My Edits"!</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Rewrite History -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">Recent Rewrite History</h3>
+              </div>
+              <div class="card-body">
+                <div class="history-list" id="history-container">
+                  <div class="text-muted text-sm">No recent rewrites recorded yet.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ======================================================== -->
+      <!-- TAB 4: MACOS HOTKEY & CLI -->
+      <!-- ======================================================== -->
+      <section class="tab-pane" id="pane-macos">
+        <div class="view-header">
+          <div>
+            <h2 class="view-title">macOS Hotkey &amp; CLI Integration</h2>
+            <p class="view-subtitle">Wire VoicePrint into your global macOS workflow — rewrite any selected text or clipboard anywhere in 1 keystroke.</p>
+          </div>
+        </div>
+
+        <div class="macos-layout">
+          <!-- Standalone macOS App Download Card -->
+          <div class="card">
+            <div class="card-body">
+              <div class="installer-hero">
+                <div class="hero-content">
+                  <h3 class="hero-title">Standalone macOS App Bundle (Mac Studio / Any Mac)</h3>
+                  <p class="hero-desc">Download the self-contained <strong>VoicePrint.app</strong> package to install into <code>/Applications</code> or copy over to your Mac Studio (AirDrop / iCloud / Finder). Includes your local database and auto-installs the global Quick Action on first launch.</p>
+                  <div class="hero-actions">
+                    <a class="btn btn-primary btn-lg" href="/download/VoicePrint-macOS.dmg" download="VoicePrint-macOS.dmg">
+                      <span>Download VoicePrint-macOS.dmg</span>
+                    </a>
+                    <a class="btn btn-secondary btn-lg" href="/download/VoicePrint-macOS.zip" download="VoicePrint-macOS.zip">
+                      <span>Download VoicePrint-macOS.zip</span>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Big Hotkey Installer Card -->
+          <div class="card hotkey-installer-card">
+            <div class="card-body">
+              <div class="installer-hero">
+                <div class="hero-icon-wrapper">
+                  <svg viewBox="0 0 48 48" fill="none" class="hero-icon">
+                    <rect width="48" height="48" rx="12" fill="url(#macos-grad)"/>
+                    <path d="M14 24C14 18.4772 18.4772 14 24 14C29.5228 14 34 18.4772 34 24" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round"/>
+                    <path d="M18 24C18 20.6863 20.6863 18 24 18C27.3137 18 30 20.6863 30 24V28C30 30.2091 28.2091 32 26 32H22" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>
+                    <circle cx="24" cy="25" r="2" fill="#ffffff"/>
+                    <defs>
+                      <linearGradient id="macos-grad" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+                        <stop stop-color="#7c6cff"/>
+                        <stop offset="1" stop-color="#22c55e"/>
+                      </linearGradient>
+                    </defs>
+                  </svg>
+                </div>
+                <div class="hero-content">
+                  <h3 class="hero-title">1-Click macOS Global Quick Action</h3>
+                  <p class="hero-desc">Generates a native Automator Services workflow at <code>~/Library/Services/VoicePrint Rewrite Clipboard.workflow</code> that triggers clipboard rewriting and plays a native macOS notification sound.</p>
+                  
+                  <div class="hero-actions">
+                    <button type="button" class="btn btn-emerald btn-lg" id="btn-install-hotkey">
+                      <svg viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/>
+                      </svg>
+                      <span>Install macOS Quick Action</span>
+                    </button>
+                    <span class="status-indicator-pill" id="hotkey-install-status" style="display: none;"></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Steps Guide -->
+              <div class="setup-steps-grid mt-4">
+                <div class="step-card">
+                  <div class="step-num">1</div>
+                  <h4 class="step-title">Click Install Above</h4>
+                  <p class="step-text">VoicePrint writes the Automator Quick Action bundle into macOS Services.</p>
+                </div>
+
+                <div class="step-card">
+                  <div class="step-num">2</div>
+                  <h4 class="step-title">Open System Settings</h4>
+                  <p class="step-text">Navigate to <strong>Keyboard</strong> → <strong>Keyboard Shortcuts</strong> → <strong>Services</strong> → <strong>General</strong>.</p>
+                </div>
+
+                <div class="step-card">
+                  <div class="step-num">3</div>
+                  <h4 class="step-title">Assign Hotkey</h4>
+                  <p class="step-text">Find <em>"VoicePrint: Rewrite Clipboard in My Voice"</em> and bind it to <strong>⌘⇧V</strong> (Cmd+Shift+V).</p>
+                </div>
+
+                <div class="step-card">
+                  <div class="step-num">4</div>
+                  <h4 class="step-title">Use Anywhere</h4>
+                  <p class="step-text">Copy text in Slack, Gmail, or Word, press <strong>⌘⇧V</strong>, and paste your humanized text!</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- CLI & Third-Party Helpers -->
+          <div class="card mt-4">
+            <div class="card-header">
+              <h3 class="card-title">Terminal CLI &amp; Launcher Integration</h3>
+              <p class="card-subtitle">Direct script commands for Terminal, Raycast, Alfred, or Alfred Workflows</p>
+            </div>
+            <div class="card-body">
+              <div class="code-snippets-list">
+                <div class="snippet-item">
+                  <div class="snippet-header">
+                    <span class="snippet-title">Run CLI Rewrite from Terminal</span>
+                    <button type="button" class="btn btn-ghost btn-sm btn-copy-snippet" data-copy="python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprint_cli.py">Copy</button>
+                  </div>
+                  <pre class="code-block font-mono"><code>python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprint_cli.py</code></pre>
+                </div>
+
+                <div class="snippet-item">
+                  <div class="snippet-header">
+                    <span class="snippet-title">Rewrite with Custom Mode &amp; Intensity</span>
+                    <button type="button" class="btn btn-ghost btn-sm btn-copy-snippet" data-copy="python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprint_cli.py --mode work_email --intensity deep">Copy</button>
+                  </div>
+                  <pre class="code-block font-mono"><code>python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprint_cli.py --mode work_email --intensity deep</code></pre>
+                </div>
+
+                <div class="snippet-item">
+                  <div class="snippet-header">
+                    <span class="snippet-title">Raycast Script Command Template</span>
+                    <button type="button" class="btn btn-ghost btn-sm btn-copy-snippet" data-copy="#!/bin/bash&#10;# @raycast.schemaVersion 1&#10;# @raycast.title VoicePrint Rewrite&#10;# @raycast.mode silent&#10;# @raycast.packageName Clipboard&#10;python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprint_cli.py">Copy</button>
+                  </div>
+                  <pre class="code-block font-mono"><code>#!/bin/bash
+# @raycast.schemaVersion 1
+# @raycast.title VoicePrint Rewrite
+# @raycast.mode silent
+# @raycast.packageName Clipboard
+python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprint_cli.py</code></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Daemon Health Card -->
+          <div class="card mt-4">
+            <div class="card-header">
+              <h3 class="card-title">Server Daemon Status</h3>
+            </div>
+            <div class="card-body">
+              <div class="daemon-status-row">
+                <div class="daemon-badge">
+                  <span class="status-dot-pulse"></span>
+                  <span>HTTP Server Online</span>
+                </div>
+                <div class="daemon-meta">
+                  <span>Endpoint: <code>http://127.0.0.1:8765</code></span>
+                  <span class="meta-sep">•</span>
+                  <span>Zero-inference local fallback: <strong class="text-emerald">Active</strong></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Global Toast Container -->
+    <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+    <!-- AI Engine Settings Modal -->
+    <div class="modal-backdrop" id="modal-settings-backdrop" style="display: none;">
+      <div class="modal-dialog" role="dialog" aria-labelledby="settings-modal-title">
+        <div class="modal-header">
+          <div class="card-title-group">
+            <span class="card-icon-pill pill-indigo">
+              <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/>
+              </svg>
+            </span>
+            <div>
+              <h3 class="modal-title" id="settings-modal-title">AI Engine Settings</h3>
+              <p class="modal-subtitle">Configure cloud LLM providers, Ollama, or run 100% offline &amp; free</p>
+            </div>
+          </div>
+          <button type="button" class="btn-close" id="btn-close-settings" aria-label="Close Settings">×</button>
+        </div>
+
+        <div class="modal-body">
+          <form id="settings-form">
+            <!-- Provider Selection -->
+            <div class="form-group">
+              <label for="setting-provider" class="form-label">Active Engine Provider</label>
+              <select id="setting-provider" class="form-select">
+                <option value="auto">Auto-Select (Gemini → OpenAI → Anthropic → Ollama → Local)</option>
+                <option value="local_only">Zero-Inference Local Only (100% Offline &amp; Free)</option>
+                <option value="gemini">Google Gemini (API Key)</option>
+                <option value="openai">OpenAI (API Key)</option>
+                <option value="anthropic">Anthropic Claude (API Key)</option>
+                <option value="ollama">Ollama (Local Models)</option>
+              </select>
+            </div>
+
+            <div class="local-guarantee-box">
+              <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 text-emerald">
+                <path fill-rule="evenodd" d="M10 1.944A11.954 11.954 0 012.166 5C2.056 5.649 2 6.319 2 7c0 5.225 3.34 9.67 8 11.317C14.66 16.67 18 12.225 18 7c0-.682-.057-1.35-.166-2.001A11.954 11.954 0 0110 1.944zM11 14a1 1 0 11-2 0 1 1 0 012 0zm0-7a1 1 0 10-2 0v3a1 1 0 102 0V7z" clip-rule="evenodd"/>
+              </svg>
+              <div>
+                <strong>Offline Guarantee:</strong> Even with zero API keys configured, VoicePrint runs locally via deterministic De-AI sentence restructuring, AI-cliché excision, and statistical Voice DNA alignment.
+              </div>
+            </div>
+
+            <!-- Gemini Card -->
+            <div class="provider-config-card">
+              <div class="provider-card-head">
+                <span class="provider-card-name">Google Gemini</span>
+                <span class="provider-status-badge" id="badge-gemini">Checking...</span>
+              </div>
+              <div class="form-row form-grid-2">
+                <div class="form-group">
+                  <label for="setting-gemini-key" class="form-label">Gemini API Key</label>
+                  <div class="input-with-action">
+                    <input type="password" id="setting-gemini-key" class="form-input" placeholder="Leave blank to keep existing key">
+                    <button type="button" class="btn btn-ghost btn-sm text-rose" id="btn-clear-gemini" title="Clear saved key">Clear</button>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="setting-gemini-model" class="form-label">Model Name</label>
+                  <input type="text" id="setting-gemini-model" class="form-input" placeholder="gemini-2.5-flash">
+                </div>
+              </div>
+            </div>
+
+            <!-- OpenAI Card -->
+            <div class="provider-config-card">
+              <div class="provider-card-head">
+                <span class="provider-card-name">OpenAI</span>
+                <span class="provider-status-badge" id="badge-openai">Checking...</span>
+              </div>
+              <div class="form-row form-grid-2">
+                <div class="form-group">
+                  <label for="setting-openai-key" class="form-label">OpenAI API Key</label>
+                  <div class="input-with-action">
+                    <input type="password" id="setting-openai-key" class="form-input" placeholder="Leave blank to keep existing key">
+                    <button type="button" class="btn btn-ghost btn-sm text-rose" id="btn-clear-openai" title="Clear saved key">Clear</button>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="setting-openai-model" class="form-label">Model Name</label>
+                  <input type="text" id="setting-openai-model" class="form-input" placeholder="gpt-4o-mini">
+                </div>
+              </div>
+            </div>
+
+            <!-- Anthropic Card -->
+            <div class="provider-config-card">
+              <div class="provider-card-head">
+                <span class="provider-card-name">Anthropic Claude</span>
+                <span class="provider-status-badge" id="badge-anthropic">Checking...</span>
+              </div>
+              <div class="form-row form-grid-2">
+                <div class="form-group">
+                  <label for="setting-anthropic-key" class="form-label">Claude API Key</label>
+                  <div class="input-with-action">
+                    <input type="password" id="setting-anthropic-key" class="form-input" placeholder="Leave blank to keep existing key">
+                    <button type="button" class="btn btn-ghost btn-sm text-rose" id="btn-clear-anthropic" title="Clear saved key">Clear</button>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="setting-anthropic-model" class="form-label">Model Name</label>
+                  <input type="text" id="setting-anthropic-model" class="form-input" placeholder="claude-3-5-haiku-latest">
+                </div>
+              </div>
+            </div>
+
+            <!-- Ollama Card -->
+            <div class="provider-config-card">
+              <div class="provider-card-head">
+                <span class="provider-card-name">Ollama (Local LLM)</span>
+                <span class="provider-status-badge badge-neutral">Local Host</span>
+              </div>
+              <div class="form-row form-grid-2">
+                <div class="form-group">
+                  <label for="setting-ollama-url" class="form-label">Ollama Base URL</label>
+                  <input type="text" id="setting-ollama-url" class="form-input" placeholder="http://localhost:11434">
+                </div>
+                <div class="form-group">
+                  <label for="setting-ollama-model" class="form-label">Model Tag</label>
+                  <input type="text" id="setting-ollama-model" class="form-input" placeholder="llama3.2">
+                </div>
+              </div>
+            </div>
+
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" id="btn-cancel-settings">Cancel</button>
+              <button type="submit" class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
