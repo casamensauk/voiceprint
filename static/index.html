@@ -1751,6 +1751,25 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
               </div>
             </div>
 
+            <!-- TypeSafe (Jev) Card -->
+            <div class="provider-config-card" id="card-setting-typesafe">
+              <div class="provider-card-head">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span class="provider-card-name">TypeSafe AI</span>
+                  <span class="text-xs text-muted">(Jev)</span>
+                </div>
+                <span class="provider-status-badge badge-unconfigured" id="badge-typesafe">Not Configured</span>
+              </div>
+              <div class="form-group">
+                <label for="setting-typesafe-key" class="form-label">TypeSafe API Key</label>
+                <div class="input-with-action">
+                  <input type="password" id="setting-typesafe-key" class="form-input" placeholder="Leave blank to keep existing key" autocomplete="off">
+                  <button type="button" class="btn btn-ghost btn-sm text-rose" id="btn-clear-typesafe" title="Clear saved TypeSafe key">Clear</button>
+                </div>
+                <span class="field-hint">Used by Jev to judge rewrites. Stored only on this Mac.</span>
+              </div>
+            </div>
+
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" id="btn-cancel-settings">Cancel</button>
               <button type="submit" class="btn btn-primary" id="btn-save-settings">Save Settings</button>

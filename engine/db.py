@@ -30,6 +30,9 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "pangram_model": "pangram-4",
     "pangram_public_link": "false",
     "inspector_engine": "inhouse",
+    "typesafe_api_key": "",
+    "jev_model": "jev-1.14.0",
+    "jev_enabled": "1",
     "openrouter_api_key": "",
     "openrouter_base_url": "https://openrouter.ai/api/v1",
     "openrouter_rewrite_model": "google/gemini-2.5-flash",
@@ -135,6 +138,17 @@ def init_db(db_path: Path | None = None) -> None:
                 max_humanizer_score REAL NOT NULL DEFAULT 0.0,
                 dashboard_link TEXT NOT NULL DEFAULT '',
                 result_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS jev_estimates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text_sha256 TEXT NOT NULL UNIQUE,
+                model TEXT NOT NULL,
+                model_written REAL NOT NULL,
+                paraphrased REAL NOT NULL,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd REAL NOT NULL DEFAULT 0.0,
                 created_at TEXT NOT NULL
             );
 
@@ -617,3 +631,32 @@ def seed_demo_samples(db_path: Path | None = None) -> dict[str, int]:
     upsert_learned_replacement("casual_chat", "approximately", "like", source="demo_seed", db_path=db_path)
     upsert_learned_replacement("work_email", "utilize", "use", source="demo_seed", db_path=db_path)
     return counts
+
+
+def save_jev_estimate(
+    text_sha256: str,
+    model: str,
+    model_written: float,
+    paraphrased: float,
+    input_tokens: int = 0,
+    cost_usd: float = 0.0,
+    db_path: Path | None = None,
+) -> None:
+    """Upsert a Jev estimate keyed by the text's hash (the text itself is never stored)."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT INTO jev_estimates (text_sha256, model, model_written, paraphrased, input_tokens, cost_usd, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(text_sha256) DO UPDATE SET "
+            "model = excluded.model, model_written = excluded.model_written, paraphrased = excluded.paraphrased, "
+            "input_tokens = excluded.input_tokens, cost_usd = excluded.cost_usd, created_at = excluded.created_at",
+            (text_sha256, model, model_written, paraphrased, input_tokens, cost_usd, utc_now()),
+        )
+        conn.commit()
+
+
+def get_jev_estimate(text_sha256: str, db_path: Path | None = None) -> dict[str, Any] | None:
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM jev_estimates WHERE text_sha256 = ?", (text_sha256,)).fetchone()
+    return dict(row) if row else None
