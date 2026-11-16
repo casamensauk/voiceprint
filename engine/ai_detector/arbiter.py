@@ -110,13 +110,16 @@ def run_arbiter_synthesis(
         "1. Look closely for modern RLHF prose signatures even when classic 2023 clichés ('delve', 'tapestry') are absent: "
         "frictionless 'Topic -> Elaboration -> At the same time -> Ultimately/Overall' symmetry, participial openers ('Instead of ...ing'), "
         "parallel 'X, Y, and Z' triads, abstract nominalizations, and 'enables/allows X to Y' boilerplate.\n"
-        "2. Weigh Stage 1 stylometrics and Stage 2 DNA-GPT BScore together objectively: high BScore (>= 0.55) OR strong RLHF scaffolding + "
-        "uniform nominalized phrasing supports higher ai_score.\n"
-        "3. Protect genuine human writing when you observe real-world specificity (concrete dates, citations, measurements, lived idiosyncrasies, "
+        "2. Also detect plain-English LLM coursework / Q&A outputs: colon-headed feature taxonomies ('Heading: Gives/Allows...'), "
+        "repeated ': When ...' example lists, symmetrical 4-5 step imperative UI guides, Oxford-comma triads paired with UK spelling, "
+        "Unicode en/em-dashes, and explainer chains ('makes a business look X, which damages Y').\n"
+        "3. Weigh Stage 1 stylometrics and Stage 2 DNA-GPT BScore together objectively: high BScore (>= 0.55) OR strong RLHF/coursework "
+        "scaffolding supports higher ai_score.\n"
+        "4. Protect genuine human writing when you observe real-world specificity (concrete dates, citations, measurements, lived idiosyncrasies, "
         "personal voice/contractions, sharp burstiness variation) and low RLHF scaffolding.\n"
-        "4. Detect AI-Humanizer evasion (is_humanized=true, humanizer_score 0.0-1.0) on awkward thesaurus swaps, mixed-script homoglyphs, "
+        "5. Detect AI-Humanizer evasion (is_humanized=true, humanizer_score 0.0-1.0) on awkward thesaurus swaps, mixed-script homoglyphs, "
         "invisible Unicode watermarks, or uniform AI syntax masked with forced contractions.\n"
-        "5. Return strict JSON with overall_summary and windows[{window_index, ai_score, is_humanized, humanizer_score, reasons}]."
+        "6. Return strict JSON with overall_summary and windows[{window_index, ai_score, is_humanized, humanizer_score, reasons}]."
     )
     user_prompt = json.dumps({"windows_evidence": evidence_blocks}, ensure_ascii=False)
 

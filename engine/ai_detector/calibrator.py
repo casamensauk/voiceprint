@@ -57,25 +57,11 @@ def calibrate_report(
     dna_scores_all: list[float] = []
     arb_scores_all: list[float] = []
 
+    # First pass: compute raw ensemble scores for every segment
+    raw_entries: list[dict[str, Any]] = []
     for idx, seg in enumerate(segments):
         if seg.is_excluded_reference:
-            windows.append(
-                DetectorWindow(
-                    text=seg.text,
-                    label="Human",
-                    ai_assistance_score=0.0,
-                    confidence="High",
-                    is_humanized=False,
-                    humanizer_score=0.0,
-                    start_index=seg.start_index,
-                    end_index=seg.end_index,
-                    word_count=seg.word_count,
-                    token_length=int(round(seg.word_count * 1.3)),
-                    is_excluded_reference=True,
-                    reasons=["Excluded reference/bibliography section (protected from false positives)"],
-                    signals=WindowSignals(),
-                )
-            )
+            raw_entries.append({"seg": seg, "excluded": True})
             continue
 
         sty = stylometrics_by_idx.get(idx, {})
@@ -106,12 +92,81 @@ def calibrate_report(
             score_sum += 0.35 * float(a_ai)
         raw_ai = score_sum / w_sum
 
+        # Stage 1 + Stage 3 agreement guard for structured coursework/Q&A prose
+        if a_ai is not None and s_ai >= 0.65 and float(a_ai) >= 0.65:
+            raw_ai = max(raw_ai, 0.45 * s_ai + 0.55 * float(a_ai))
+
         # Combine humanizer score
         hum_score = max(s_hum, float(a_hum)) if a_hum is not None else s_hum
-        # Hard guard: mixed-script homoglyphs or invisible watermarks indicate deliberate obfuscation
         if int(sty.get("homoglyph_count") or 0) > 0 or int(sty.get("unicode_anomaly_count") or 0) > 0:
             hum_score = max(hum_score, 0.72)
             raw_ai = max(raw_ai, 0.72)
+
+        raw_entries.append(
+            {
+                "seg": seg,
+                "excluded": False,
+                "sty": sty,
+                "arb": arb,
+                "s_ai": s_ai,
+                "s_hum": s_hum,
+                "d_bscore": d_bscore,
+                "d_entropy": d_entropy,
+                "a_ai": a_ai,
+                "a_hum": a_hum,
+                "raw_ai": raw_ai,
+                "hum_score": hum_score,
+            }
+        )
+
+    # Document-level coherence blend for multi-window AI submissions
+    body_entries = [e for e in raw_entries if not e["excluded"]]
+    doc_body_words = sum(e["seg"].word_count for e in body_entries)
+    doc_mean_ai = (
+        sum(e["raw_ai"] * e["seg"].word_count for e in body_entries) / float(max(1, doc_body_words))
+        if body_entries
+        else 0.0
+    )
+
+    for entry in raw_entries:
+        seg = entry["seg"]
+        if entry["excluded"]:
+            excl_reason = (
+                getattr(seg, "exclusion_reason", "")
+                or "Excluded reference/bibliography section (protected from false positives)"
+            )
+            windows.append(
+                DetectorWindow(
+                    text=seg.text,
+                    label="Human",
+                    ai_assistance_score=0.0,
+                    confidence="High",
+                    is_humanized=False,
+                    humanizer_score=0.0,
+                    start_index=seg.start_index,
+                    end_index=seg.end_index,
+                    word_count=seg.word_count,
+                    token_length=int(round(seg.word_count * 1.3)),
+                    is_excluded_reference=True,
+                    reasons=[excl_reason],
+                    signals=WindowSignals(),
+                )
+            )
+            continue
+
+        sty = entry["sty"]
+        arb = entry["arb"]
+        s_ai = entry["s_ai"]
+        s_hum = entry["s_hum"]
+        d_bscore = entry["d_bscore"]
+        d_entropy = entry["d_entropy"]
+        a_ai = entry["a_ai"]
+        a_hum = entry["a_hum"]
+        raw_ai = entry["raw_ai"]
+        hum_score = entry["hum_score"]
+
+        if len(body_entries) >= 3 and doc_mean_ai >= 0.68 and not sty.get("has_personal_counter"):
+            raw_ai = 0.78 * raw_ai + 0.22 * doc_mean_ai
 
         raw_ai = round(min(1.0, max(0.0, raw_ai)), 4)
         hum_score = round(min(1.0, max(0.0, hum_score)), 4)

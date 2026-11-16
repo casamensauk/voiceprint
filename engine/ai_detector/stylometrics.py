@@ -1,4 +1,4 @@
-"""Stage 1: Pure deterministic stylometrics, RLHF prose cues, Unicode/homoglyph & humanizer forensics."""
+"""Stage 1: Pure deterministic stylometrics, coursework taxonomy, RLHF prose, & Unicode forensics."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ from engine.analyzer import (
     HIGH_RISK_AI_WORDS,
     ROBOTIC_TRANSITIONS,
     compute_contraction_stats,
-    split_sentences,
 )
+
+from .preprocessor import split_sentences_recover_collapsed
 
 # Zero-width & invisible watermark characters commonly inserted by obfuscators/LLMs
 _ZERO_WIDTH_CHARS = {
@@ -38,7 +39,7 @@ _TOKEN_ALPHA_RE = re.compile(r"\S+")
 _WORD_RE = re.compile(r"[A-Za-z0-9'’-]+")
 _NOT_ONLY_RE = re.compile(r"\bnot only\b.{2,120}\bbut also\b", re.IGNORECASE | re.DOTALL)
 
-# Modern GPT-4o / Claude / Gemini RLHF discourse framing constructions (cliché-free AI prose)
+# Modern GPT-4o / Claude / Gemini RLHF discourse framing constructions
 _RLHF_FRAMING_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("Instead/Rather than -ing framing", re.compile(r"\b(?:instead|rather)\s+of\s+[a-z]+ing\b", re.IGNORECASE)),
     ("Participial 'By ...ing, ...' opener", re.compile(r"(?:^|[.!?]\s+)by\s+[a-z]+ing\b[^.!?\n]{4,90},", re.IGNORECASE)),
@@ -49,10 +50,46 @@ _RLHF_FRAMING_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("Dual-pole 'both X and Y' balance", re.compile(r"\bboth\s+[a-z\-]{3,24}\s+and\s+[a-z\-]{3,24}\b", re.IGNORECASE)),
     ("Horizon/scope cliché", re.compile(r"\b(?:over the long term|across the board|in the long run)\b", re.IGNORECASE)),
     ("Role/importance cliché", re.compile(r"\bplays\s+a\s+(?:key|vital|central|critical|major|pivotal)\s+role\b", re.IGNORECASE)),
-    ("Parallel X, Y, and Z triad", re.compile(r"\b[a-z\-]+(?:\s+[a-z\-]+){0,2},\s+[a-z\-]+(?:\s+[a-z\-]+){0,2},\s+and\s+[a-z\-]+(?:\s+[a-z\-]+)?\b", re.IGNORECASE)),
 ]
 
-# Soft instructional / corporate / RLHF expository vocabulary (common in modern LLMs without 2023 clichés)
+# Coursework & structured Q&A LLM forensics
+_TAXONOMY_HEADING_RE = re.compile(
+    r"(?:^|\n|(?<=[a-z0-9.)]))[ \t]*([A-Z][A-Za-z0-9 &/\-()’'–]{2,52}):[ \t]*(?=[A-Z\"“])"
+)
+_WHEN_ANAPHORA_RE = re.compile(r":\s*When\b")
+_VERB_FIRST_DEF_RE = re.compile(
+    r":\s*(?:Gives|Allows|Lets|Provides|Focuses|Helps|Tracks|Tools that|Built-in|"
+    r"Centred on|Centered on|Perfect for|Great for|Ideal for|Use |Look at )\b"
+)
+_IMPERATIVE_STEP_RE = re.compile(
+    r"^(?:Log into|Open|Go to|Click|Tap|Choose|Pick|Write|Type|Upload|Attach|Add|Adjust|Check|Review|Select)\b"
+)
+_OXFORD_TRIAD_RE = re.compile(
+    r"\b[A-Za-z0-9\-]+(?:\s+[A-Za-z0-9\-]+){0,3},\s+[A-Za-z0-9\-]+(?:\s+[A-Za-z0-9\-]+){0,3},\s+(?:and|or)\s+[A-Za-z0-9\-]+",
+    re.IGNORECASE,
+)
+_UK_SPELLING_RE = re.compile(
+    r"\b(?:colour|colours|recognisable|disorganised|centred|organisation|organisations|behaviour|analyse|programme|advert|adverts|favourite)\b",
+    re.IGNORECASE,
+)
+_MAKES_LOOK_RE = re.compile(
+    r"\bmakes?\s+(?:a\s+|the\s+|your\s+)?(?:business|company|brand|profile|page|organisation|organization|them|it)\s+(?:look|appear|seem)\b",
+    re.IGNORECASE,
+)
+_WHICH_EVAL_RE = re.compile(
+    r",\s+which\s+(?:makes|damages|puts|helps|shows|matches|leads|creates|builds|turns|means|allows|gives)\b",
+    re.IGNORECASE,
+)
+_EXPLAINER_STOCK_RE = re.compile(
+    r"\b(?:so\s+(?:customers|users|people|followers)\s+can|potential\s+(?:new\s+)?customers|"
+    r"turns\s+a\s+negative\s+situation\s+into\s+a\s+positive|"
+    r"before\s+it\s+(?:turns\s+into|escalates)|when\s+things\s+go\s+wrong|in\s+real\s+time|"
+    r"thought[- ]leadership|call-to-action|social\s+proof|organic\s+reach|target\s+audience|"
+    r"brand\s+sentiment|behind-the-scenes|decision-makers)\b",
+    re.IGNORECASE,
+)
+
+# Soft instructional / corporate / RLHF expository vocabulary
 _MODERN_RLHF_WORDS: set[str] = {
     "collaboration", "well-defined", "milestones", "distributed", "expectations",
     "handoffs", "predictable", "synchronous", "asynchronous", "asynchronously",
@@ -155,7 +192,7 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
     cleaned = text.strip()
     words = _WORD_RE.findall(cleaned)
     word_count = max(1, len(words))
-    sentences = split_sentences(cleaned)
+    sentences = split_sentences_recover_collapsed(cleaned)
     sent_lengths = [len(s.split()) for s in sentences if s.split()]
 
     # 1. Burstiness CV & length range
@@ -202,16 +239,43 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         if pat.search(cleaned):
             framing_hits.append(label)
 
+    triad_hits = _OXFORD_TRIAD_RE.findall(cleaned)
     rlhf_soft_hits = [w.lower() for w in words if w.lower() in _MODERN_RLHF_WORDS]
     rlhf_density_per_100 = (len(rlhf_soft_hits) / float(word_count)) * 100.0
 
-    em_dash_count = cleaned.count("—")
+    # 6. Structured Coursework & Plain-English Explainer Forensics
+    raw_headings = [
+        m.group(1).strip()
+        for m in _TAXONOMY_HEADING_RE.finditer(cleaned)
+        if m.group(1).strip().lower() not in ("your answer", "http", "https")
+    ]
+    taxonomy_count = len(raw_headings)
+    when_anaphora_count = len(_WHEN_ANAPHORA_RE.findall(cleaned))
+    verb_def_count = len(_VERB_FIRST_DEF_RE.findall(cleaned))
+
+    # Count imperative UI/process checklist steps across sentences & colon splits
+    step_clauses = []
+    for sent in sentences:
+        if ":" in sent:
+            step_clauses.append(sent.split(":", 1)[1].strip())
+        step_clauses.append(sent.strip())
+    imperative_step_count = sum(1 for cl in step_clauses if _IMPERATIVE_STEP_RE.match(cl))
+
+    makes_look_count = len(_MAKES_LOOK_RE.findall(cleaned))
+    which_eval_count = len(_WHICH_EVAL_RE.findall(cleaned))
+    explainer_stock_count = len(_EXPLAINER_STOCK_RE.findall(cleaned))
+
+    has_uk_spelling = bool(_UK_SPELLING_RE.search(cleaned))
+    has_oxford_comma = bool(re.search(r",\s+(?:and|or)\s+", cleaned))
+
+    em_dash_count = cleaned.count("\u2014")
+    en_dash_count = cleaned.count("\u2013")
     has_not_only = bool(_NOT_ONLY_RE.search(cleaned))
 
-    # 6. Unicode / watermark / homoglyph checks
+    # 7. Unicode / watermark / homoglyph checks
     uni = detect_unicode_and_homoglyphs(cleaned)
 
-    # 7. Humanizer artifact heuristics
+    # 8. Humanizer artifact heuristics
     artifact_hits = [
         art for art in _HUMANIZER_ARTIFACTS if re.search(r"\b" + re.escape(art) + r"\b", cleaned, re.IGNORECASE)
     ]
@@ -230,6 +294,44 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
     if framing_hits:
         ai_score += min(0.36, len(framing_hits) * 0.09)
         reasons.append(f"RLHF discourse scaffolding ({len(framing_hits)}): {', '.join(framing_hits[:3])}")
+
+    if triad_hits:
+        triad_add = 0.34 if len(triad_hits) >= 3 else (0.22 if len(triad_hits) == 2 else 0.10)
+        ai_score += triad_add
+        reasons.append(f"Parallel Oxford-comma triads ({len(triad_hits)})")
+
+    if has_uk_spelling and has_oxford_comma and (len(triad_hits) >= 1 or taxonomy_count >= 2 or makes_look_count >= 1):
+        ai_score += 0.10
+        reasons.append("UK spelling paired with systematic US Oxford-comma cadence")
+
+    if taxonomy_count >= 2:
+        tax_add = 0.54 if taxonomy_count >= 5 else (0.40 if taxonomy_count >= 3 else 0.26)
+        ai_score += tax_add
+        reasons.append(f"Structured 'Heading: Explanation' taxonomy ({taxonomy_count} items)")
+
+    if when_anaphora_count >= 2:
+        ai_score += 0.26
+        reasons.append(f"Repetitive ': When ...' example template ({when_anaphora_count}x)")
+
+    if verb_def_count >= 2:
+        ai_score += 0.26
+        reasons.append(f"Verb-first textbook definitions ({verb_def_count}x)")
+
+    if imperative_step_count >= 3:
+        ai_score += 0.38
+        reasons.append(f"Sequential imperative process checklist ({imperative_step_count} steps)")
+
+    if makes_look_count >= 1:
+        ai_score += 0.32 if makes_look_count >= 2 else 0.16
+        reasons.append(f"Explainer 'makes [entity] look/appear' pattern ({makes_look_count}x)")
+
+    if which_eval_count >= 1:
+        ai_score += 0.24 if which_eval_count >= 2 else 0.12
+        reasons.append(f"Evaluative ', which [verb]s' clause pattern ({which_eval_count}x)")
+
+    if explainer_stock_count >= 2:
+        ai_score += 0.30 if explainer_stock_count >= 4 else 0.18
+        reasons.append(f"Plain-English explainer stock phrases ({explainer_stock_count})")
 
     if len(rlhf_soft_hits) >= 4 or rlhf_density_per_100 >= 7.0:
         add_soft = 0.22 if rlhf_density_per_100 >= 10.0 else 0.14
@@ -261,9 +363,13 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         ai_score += 0.10
         reasons.append("Frictionless declarative rhythm (no contractions, questions, or asides)")
 
-    if em_dash_count >= 2 or (em_dash_count >= 1 and word_count <= 90):
+    if em_dash_count >= 2 or (em_dash_count >= 1 and word_count <= 140):
         ai_score += 0.12
-        reasons.append(f"Elevated em-dash density ({em_dash_count})")
+        reasons.append(f"Unicode em-dash typography ({em_dash_count})")
+    elif en_dash_count >= 1:
+        ai_score += 0.12
+        reasons.append(f"Unicode en-dash range formatting ({en_dash_count})")
+
     if has_not_only:
         ai_score += 0.10
         reasons.append("Correlative 'Not only ... but also ...' template")
@@ -277,14 +383,17 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
     # Human & empirical academic counter-signals (protect natural writing from false positives)
     casual_hits = len(_CASUAL_HUMAN_MARKERS.findall(cleaned))
     citation_hits = len(_CITATION_OR_DATA_RE.findall(cleaned))
+    has_heavy_coursework_ai = taxonomy_count >= 2 or imperative_step_count >= 3 or makes_look_count >= 2
 
-    if c_cnt >= 2 or (has_contraction_ops and contraction_rate >= 0.45):
-        ai_score -= 0.14
-    if casual_hits >= 2:
-        ai_score -= min(0.22, casual_hits * 0.07)
-    if len(sent_lengths) >= 2 and min_sent_len <= 7 and cv >= 0.40:
-        ai_score -= 0.14
-    if citation_hits >= 2 and len(vocab_hits) == 0 and len(framing_hits) <= 2:
+    if not has_heavy_coursework_ai:
+        if c_cnt >= 3 or (c_cnt >= 1 and casual_hits >= 1 and len(triad_hits) <= 1):
+            ai_score -= 0.14
+        if casual_hits >= 2:
+            ai_score -= min(0.22, casual_hits * 0.07)
+        if len(sent_lengths) >= 2 and min_sent_len <= 7 and cv >= 0.40:
+            ai_score -= 0.14
+
+    if citation_hits >= 2 and len(vocab_hits) == 0 and len(framing_hits) <= 2 and taxonomy_count < 2:
         ai_score -= min(0.26, citation_hits * 0.08)
         reasons.append(f"Empirical data / explicit citation markers present ({citation_hits})")
 
@@ -318,8 +427,9 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         "burstiness_cv": round(cv, 3),
         "contraction_rate": round(contraction_rate, 3),
         "mattr": round(mattr, 3),
-        "ai_lexicon_hits": len(vocab_hits) + len(transition_hits) + len(framing_hits),
+        "ai_lexicon_hits": len(vocab_hits) + len(transition_hits) + len(framing_hits) + taxonomy_count + len(triad_hits),
         "unicode_anomaly_count": uni["unicode_anomaly_count"],
         "homoglyph_count": uni["homoglyph_count"],
+        "has_personal_counter": (casual_hits >= 2 and not has_heavy_coursework_ai) or (citation_hits >= 2 and taxonomy_count < 2),
         "reasons": reasons,
     }

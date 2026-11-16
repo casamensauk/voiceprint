@@ -1177,6 +1177,44 @@ class TestInHouseAiDetector(BaseEngineTestCase):
         self.assertEqual(cfg_openai["provider"], "openai")
         self.assertEqual(cfg_openai["api_key"], "sk-openai-test")
 
+    def test_lms_coursework_submission_vs_human_student_answer(self) -> None:
+        """Collapsed LMS coursework Q&A text scores >=0.90 AI while excluding prompts; genuine human Q&A scores 0.0."""
+        lms_submission = (
+            "Q1 Outline the main features of four social media channels for business use. (1.1)\n"
+            "Your Answer:\n"
+            "Meta (Facebook):Business Pages: Gives businesses a dedicated public profile to display opening times, website links, contact details, and location maps so customers can find them easilyCommunity Groups: Allows businesses to build or join local groups to chat directly with customers and answer questions in a community settingMeta Business Suite & Targeted Ads: Tools that let you schedule posts in advance and run adverts targeted at specific age groups, locations, and interestsLinkedIn:Company Profiles & Networking: A professional platform where companies can post industry news, share updates, and network with other businessesJob Postings & Recruitment: Built-in recruitment tools that let businesses advertise job vacancies and search for qualified candidates\n"
+            "[Click to edit](https://westcollegescotland.equal-online.com/learning/assessmentplayer?ls=17607056&q=865217)\n"
+            "Q2 Give three examples of when each social media platform is most suitable for business use. (1.2)\n"
+            "Your Answer:\n"
+            "Instagram:Showcasing visual products: When lifestyle brands like clothing shops, florists, or restaurants want to display high-quality photos and videos of their productsInfluencer partnerships: When teaming up with content creators to demo products and build social proofReaching young adults (18\u201324): When marketing to younger audiences who use Instagram heavily for product discoveryLinkedIn:Business-to-Business (B2B) marketing: When selling corporate services, software, or consultancy directly to other company managers and decision-makers\n"
+            "[Click to edit](https://westcollegescotland.equal-online.com/learning/assessmentplayer?ls=17607056&q=865222)\n"
+            "Q3 Outline the process for a business to publish content on the four social media channels selected in Q1. (1.3)\n"
+            "Your Answer:\n"
+            "Meta (Facebook):Log into your business page or open Meta Business SuiteClick \"Create Post\" and select whether you want to post to Facebook, Instagram, or bothType out your message, making sure to include a clear call-to-action (like a link to your site)Upload your image or video and tag a product or location if applicableCheck the preview for desktop and mobile, then hit \"Publish\" or schedule it for a later date and time\n"
+            "[Click to edit](https://westcollegescotland.equal-online.com/learning/assessmentplayer?ls=17607056&q=865227)\n"
+            "Q8 Explain how the following can impact upon a business\u2019 reputation. (3.1)\n"
+            "Your Answer:\n"
+            "Most customers today expect to look up a business on social media to check that they are legitimate. Having no presence at all makes a company look outdated or untrustworthy, and it gives competitors an easy advantage because customers will just go to the brands they can find.Posting once every few months or leaving accounts dead for weeks makes a business look disorganised or like it might have closed down. It also means customer comments and questions get left unanswered, which makes the company look uncaring.Only replying to praise while ignoring genuine complaints makes a business look dishonest and out of touch. Customers notice when bad reviews are brushed under the carpet, which damages trust and makes people think the company doesn't care about solving real customer issues."
+        )
+        res_lms = analyze_text_for_ai(lms_submission, use_openrouter=False, bypass_cache=True, db_path=self.db_path)
+        self.assertGreaterEqual(res_lms["fraction_ai"], 0.90)
+        self.assertEqual(res_lms["headline"], "Likely AI-Generated")
+        excluded = [w for w in res_lms["windows"] if w["is_excluded_reference"]]
+        self.assertGreaterEqual(len(excluded), 4)
+        for w in res_lms["windows"]:
+            self.assertEqual(lms_submission[w["start_index"]:w["end_index"]], w["text"])
+
+        human_student = (
+            "Meta Business Pages let small shops put up their phone number, address and opening hours. "
+            "People can also leave reviews or message them directly. "
+            "I think Facebook works best for local cafes or plumbers where older customers already hang out, whereas Instagram is better if you are selling clothes or food because it is all photos. "
+            "When I ran our club page last year we just posted reels twice a week and answered DMs after work. "
+            "If a business ignores bad comments people stop trusting them, simple as that."
+        )
+        res_human = analyze_text_for_ai(human_student, use_openrouter=False, bypass_cache=True, db_path=self.db_path)
+        self.assertEqual(res_human["fraction_ai"], 0.0)
+        self.assertEqual(res_human["headline"], "Likely Human")
+
 
 class TestAutoUpdater(BaseEngineTestCase):
     """Test GitHub release update checking, semver comparisons, and URL safety."""
