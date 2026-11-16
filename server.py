@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import mimetypes
 import os
@@ -23,24 +24,37 @@ DOWNLOADABLE_PACKAGES = {
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from engine.academic_coach import check_source_citations, coach_academic_draft  # noqa: E402
 from engine.analyzer import analyze_text  # noqa: E402
 from engine.db import (  # noqa: E402
     CONTEXT_MODES,
+    add_pangram_scan,
     add_samples_bulk,
     clear_samples,
     delete_learned_replacement,
+    delete_pangram_scan,
     delete_sample,
     get_edit_pairs,
     get_learned_replacements,
+    get_pangram_scans,
     get_public_settings,
     get_rewrite_history,
     get_samples,
+    get_settings,
     init_db,
     seed_demo_samples,
     update_settings,
     upsert_learned_replacement,
 )
 from engine.importers import parse_imported_content  # noqa: E402
+from engine.pangram_client import (  # noqa: E402
+    PangramError,
+    check_web_plagiarism_pangram,
+    list_pangram_models,
+    resolve_pangram_key,
+    scan_file_pangram,
+    scan_text_pangram,
+)
 from engine.rewriter import rewrite_text  # noqa: E402
 from engine.style_dna import extract_voice_dna, learn_from_user_edit  # noqa: E402
 from macos.install_quick_action import install_quick_action  # noqa: E402
@@ -111,8 +125,33 @@ def build_state_payload(requested_mode: str | None = None) -> dict[str, Any]:
         "learned_replacements": active_rules,
         "edit_pairs": get_edit_pairs(context_mode=active_mode, limit=20),
         "history": get_rewrite_history(limit=20),
+        "pangram_scans": get_pangram_scans(limit=20),
         "maturity": _compute_maturity(len(all_samples), gold_edits, len(all_rules)),
     }
+
+
+def _persist_pangram_result(res: dict[str, Any], title: str) -> int:
+    """Save a completed Pangram text, file, or plagiarism scan in SQLite."""
+    estimate = res.get("estimate") or {}
+    scan_type = str(res.get("scan_type") or "text")
+    headline = str(res.get("headline") or "")
+    if scan_type == "plagiarism" and not headline:
+        score_pct = int(round(float(res.get("plagiarism_score") or 0.0) * 100))
+        headline = f"Web Plagiarism: {score_pct}% ({len(res.get('matches') or [])} match(es))"
+    return add_pangram_scan(
+        scan_type=scan_type,
+        title=title,
+        input_text=str(res.get("text") or ""),
+        word_count=int(estimate.get("word_count") or len(str(res.get("text") or "").split())),
+        estimated_cost_usd=float(estimate.get("estimated_cost_usd") or 0.0),
+        headline=headline,
+        fraction_ai=float(res.get("fraction_ai") or 0.0),
+        fraction_ai_assisted=float(res.get("fraction_ai_assisted") or 0.0),
+        fraction_human=float(res.get("fraction_human") or 0.0),
+        max_humanizer_score=float(res.get("max_humanizer_score") or 0.0),
+        dashboard_link=str(res.get("dashboard_link") or ""),
+        result_payload=res,
+    )
 
 
 class VoicePrintHandler(BaseHTTPRequestHandler):
@@ -211,6 +250,17 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
             text = _read_pbpaste()
             dna = extract_voice_dna(get_samples(context_mode=mode), get_learned_replacements(context_mode=mode))
             self._send_json({"text": text, "analysis": analyze_text(text, dna), "context_mode": mode})
+            return
+
+        if path == "/api/pangram/models":
+            settings = get_settings()
+            override = (qs.get("api_key") or [""])[0]
+            try:
+                key = resolve_pangram_key(settings, override)
+                models = list_pangram_models(key)
+                self._send_json({"models": models, "ok": True})
+            except PangramError as err:
+                self._send_json({"error": err.message, "ok": False}, status=err.status_code)
             return
 
         self._send_json({"error": "Endpoint not found"}, status=404)
@@ -326,6 +376,84 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
             self._send_json(res)
             return
 
+        if path == "/api/pangram/scan":
+            settings = get_settings()
+            text = str(body.get("text") or "")
+            model = str(body.get("model") or settings.get("pangram_model") or "pangram-4")
+            pub_raw = body.get("public_dashboard_link")
+            public_link = (
+                bool(pub_raw)
+                if pub_raw is not None
+                else settings.get("pangram_public_link", "false").lower() == "true"
+            )
+            title = str(body.get("title") or "").strip() or (text.strip()[:52] + ("..." if len(text.strip()) > 52 else ""))
+            try:
+                key = resolve_pangram_key(settings, str(body.get("api_key") or ""))
+                res = scan_text_pangram(text, api_key=key, model=model, public_dashboard_link=public_link)
+                scan_id = _persist_pangram_result(res, title or "Pasted Submission")
+                res["scan_id"] = scan_id
+                self._send_json({"result": res, "state": build_state_payload(settings.get("active_context_mode"))})
+            except PangramError as err:
+                self._send_json({"error": err.message}, status=err.status_code)
+            return
+
+        if path == "/api/pangram/file":
+            settings = get_settings()
+            filename = str(body.get("filename") or "submission.txt")
+            b64 = str(body.get("content_base64") or "")
+            prefer_p4 = bool(body.get("prefer_pangram_4", True))
+            pub_raw = body.get("public_dashboard_link")
+            public_link = (
+                bool(pub_raw)
+                if pub_raw is not None
+                else settings.get("pangram_public_link", "false").lower() == "true"
+            )
+            try:
+                file_bytes = base64.b64decode(b64, validate=True)
+            except Exception:
+                self._send_json({"error": "Invalid base64 file content."}, status=400)
+                return
+            try:
+                key = resolve_pangram_key(settings, str(body.get("api_key") or ""))
+                res = scan_file_pangram(
+                    filename,
+                    file_bytes,
+                    api_key=key,
+                    prefer_pangram_4=prefer_p4,
+                    public_dashboard_link=public_link,
+                )
+                scan_id = _persist_pangram_result(res, Path(filename).name)
+                res["scan_id"] = scan_id
+                self._send_json({"result": res, "state": build_state_payload(settings.get("active_context_mode"))})
+            except PangramError as err:
+                self._send_json({"error": err.message}, status=err.status_code)
+            return
+
+        if path == "/api/pangram/plagiarism":
+            settings = get_settings()
+            text = str(body.get("text") or "")
+            title = str(body.get("title") or "").strip() or (text.strip()[:52] + ("..." if len(text.strip()) > 52 else ""))
+            try:
+                key = resolve_pangram_key(settings, str(body.get("api_key") or ""))
+                res = check_web_plagiarism_pangram(text, api_key=key)
+                scan_id = _persist_pangram_result(res, title or "Plagiarism Check")
+                res["scan_id"] = scan_id
+                self._send_json({"result": res, "state": build_state_payload(settings.get("active_context_mode"))})
+            except PangramError as err:
+                self._send_json({"error": err.message}, status=err.status_code)
+            return
+
+        if path == "/api/academic/citation-check":
+            draft_text = str(body.get("draft_text") or "")
+            source_text = str(body.get("source_text") or "")
+            self._send_json(check_source_citations(draft_text, source_text))
+            return
+
+        if path == "/api/academic/coach":
+            draft_text = str(body.get("draft_text") or "")
+            self._send_json(coach_academic_draft(draft_text))
+            return
+
         self._send_json({"error": "Endpoint not found"}, status=404)
 
     def do_DELETE(self) -> None:  # noqa: N802
@@ -351,6 +479,16 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Invalid rule ID"}, status=400)
                 return
             ok = delete_learned_replacement(rule_id)
+            self._send_json({"deleted": ok, "state": build_state_payload(mode)})
+            return
+
+        if path.startswith("/api/pangram/scans/"):
+            try:
+                scan_id = int(path.rsplit("/", 1)[-1])
+            except ValueError:
+                self._send_json({"error": "Invalid scan ID"}, status=400)
+                return
+            ok = delete_pangram_scan(scan_id)
             self._send_json({"deleted": ok, "state": build_state_payload(mode)})
             return
 

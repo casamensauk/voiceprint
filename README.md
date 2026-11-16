@@ -17,6 +17,8 @@ VoicePrint reads text from your clipboard, strips synthetic AI patterns (cliché
 ## Features
 
 - **Clipboard Studio + Live AI-Tell & Burstiness Scoring**: Inspects AI vocabulary, robotic transitions, structural templates, and sentence-length variance (burstiness) before and after rewriting.
+- **AI & Originality Inspector (Pangram Labs Pay-As-You-Go)**: Paste text or upload `.docx`/`.pdf`/`.rtf`/`.txt` files to inspect third-party submissions using Pangram `pangram-4` (AI, AI-Assisted, Human breakdown + `is_humanized` / `humanizer_score` detection, character-offset highlights, web plagiarism check, PAYG cost estimator, and saved scan history).
+- **Source & Revision Coach**: Side-by-side local citation overlap checker (flags unquoted verbatim spans and close paraphrases while recognizing properly cited quotes) and an author-led Academic Revision Coach for passive voice, unattributed claims, vague filler, and repetitive openers.
 - **Grow With Me (Final-Edit Learning)**: Tweak any draft before copying and VoicePrint diffs your edit, saves it as a `2.5x` weighted gold sample, and extracts word/phrasing swap rules automatically.
 - **Bulk Importer**: Import WhatsApp exports, Discord/Slack logs, emails, CSVs, and plain `.txt`/`.md` documents across 4 context modes (`Casual Chat`, `Work Email`, `Long-Form`, `Social / DM`).
 - **Flexible AI Backend**: Works completely offline via its built-in deterministic De-AI & Voice DNA engine, or pairs with local **Ollama** or **Gemini / OpenAI / Anthropic** APIs.

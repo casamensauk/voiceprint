@@ -7,11 +7,14 @@ Covers:
 3. Voice DNA extraction tests (quantitative cadence, punctuation, and casing habits).
 4. Rewriter & De-AI tests (local mode deterministic cliché stripping and burstiness modulation).
 5. Grow With Me final-edit learning loop (user correction diffing and rule application).
-6. HTTP Server API smoke tests (GET state, POST rewrite, seed demo, learn-edit, rules).
+6. Pangram Labs client tests (cost estimation, async polling, validation, docx extraction).
+7. Academic Coach tests (source citation overlap checking and clarity diagnostics).
+8. HTTP Server API smoke tests (GET state, POST rewrite, seed demo, learn-edit, rules, academic & Pangram endpoints).
 """
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -19,15 +22,23 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
+import zipfile
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 # Ensure voiceprint project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from engine.academic_coach import (
+    check_source_citations,
+    coach_academic_draft,
+)
 from engine.analyzer import (
     analyze_text,
     compute_burstiness,
@@ -39,6 +50,7 @@ from engine.db import (
     clear_samples,
     get_connection,
     get_learned_replacements,
+    get_pangram_scans,
     get_public_settings,
     get_rewrite_history,
     get_samples,
@@ -49,9 +61,38 @@ from engine.db import (
     upsert_learned_replacement,
 )
 from engine.importers import detect_format, parse_imported_content
+from engine.pangram_client import (
+    PangramError,
+    estimate_pangram_cost,
+    extract_docx_text,
+    scan_file_pangram,
+    scan_text_pangram,
+)
 from engine.rewriter import apply_deterministic_de_ai, rewrite_text
 from engine.style_dna import extract_voice_dna, learn_from_user_edit
 from server import VoicePrintHandler
+
+
+class _MockHTTPResponse:
+    """Mock context-manager response for urllib.request.urlopen."""
+
+    def __init__(self, data: dict | list | str, status: int = 200) -> None:
+        if isinstance(data, (dict, list)):
+            self.raw = json.dumps(data).encode("utf-8")
+        elif isinstance(data, str):
+            self.raw = data.encode("utf-8")
+        else:
+            self.raw = data
+        self.status = status
+
+    def read(self) -> bytes:
+        return self.raw
+
+    def __enter__(self) -> _MockHTTPResponse:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        pass
 
 
 class BaseEngineTestCase(unittest.TestCase):
@@ -390,6 +431,188 @@ class TestGrowWithMeLearningLoop(BaseEngineTestCase):
         self.assertIn("maybe", new_rewritten.lower())
 
 
+class TestPangramClient(BaseEngineTestCase):
+    """Test Pangram Labs Pay-As-You-Go client cost estimation, async polling, and docx extraction."""
+
+    def test_cost_estimation_and_min_length(self) -> None:
+        """estimate_pangram_cost computes $0.05 per 100 words, 20% bulk discount, and enforces >= 50 chars."""
+        # 200 words standard: (200 / 100) * $0.05 = $0.10
+        text_200 = "word " * 200
+        est_std = estimate_pangram_cost(text_200, is_bulk=False)
+        self.assertEqual(est_std["word_count"], 200)
+        self.assertEqual(est_std["estimated_cost_usd"], 0.10)
+        self.assertTrue(est_std["meets_min_chars"])
+
+        # 200 words bulk: 20% discount -> $0.08
+        est_bulk = estimate_pangram_cost(text_200, is_bulk=True)
+        self.assertEqual(est_bulk["estimated_cost_usd"], 0.08)
+
+        # < 50 chars sets meets_min_chars=False
+        short_text = "short text"
+        est_short = estimate_pangram_cost(short_text)
+        self.assertFalse(est_short["meets_min_chars"])
+        self.assertLess(est_short["char_count"], 50)
+
+    def test_scan_text_async_submit_and_poll(self) -> None:
+        """scan_text_pangram submits task, polls stage, verifies headers/model, and parses humanizer flags."""
+        resps = [
+            _MockHTTPResponse({"task_id": "t-123"}),
+            _MockHTTPResponse({"task_id": "t-123", "stage": "STAGE_PREPROCESSING"}),
+            _MockHTTPResponse({
+                "task_id": "t-123",
+                "stage": "STAGE_SUCCESS",
+                "fraction_ai": 0.25,
+                "fraction_ai_assisted": 0.50,
+                "fraction_human": 0.25,
+                "dashboard_link": "https://dashboard.pangram.com/t-123",
+                "windows": [
+                    {
+                        "text": "This portion shows signs of automated modification.",
+                        "is_humanized": True,
+                        "humanizer_score": 0.84,
+                    }
+                ],
+            }),
+        ]
+
+        text_to_scan = "This is an academic draft long enough to meet the fifty character threshold easily."
+        with patch("urllib.request.urlopen", side_effect=resps) as mock_urlopen:
+            res = scan_text_pangram(
+                text=text_to_scan,
+                api_key="test-api-key-123",
+                model="pangram-4",
+                poll_s=0.1,
+            )
+
+            # Verify POST /task request sent x-api-key header and model "pangram-4"
+            first_call_req = mock_urlopen.call_args_list[0][0][0]
+            self.assertEqual(first_call_req.get_header("X-api-key"), "test-api-key-123")
+            post_payload = json.loads(first_call_req.data.decode("utf-8"))
+            self.assertEqual(post_payload.get("model"), "pangram-4")
+
+            # Verify polling succeeded and returned normalized result
+            self.assertEqual(res["task_id"], "t-123")
+            self.assertEqual(res["fraction_ai"], 0.25)
+            self.assertEqual(res["fraction_ai_assisted"], 0.50)
+            self.assertEqual(res["fraction_human"], 0.25)
+            self.assertEqual(res["dashboard_link"], "https://dashboard.pangram.com/t-123")
+            self.assertTrue(res["has_humanized_segments"])
+            self.assertEqual(res["max_humanizer_score"], 0.84)
+            self.assertEqual(len(res["windows"]), 1)
+            self.assertTrue(res["windows"][0]["is_humanized"])
+            self.assertEqual(res["windows"][0]["humanizer_score"], 0.84)
+
+    def test_scan_text_validation_and_stage_failed(self) -> None:
+        """< 50 chars raises PangramError(400) without network, and STAGE_FAILED raises PangramError(422)."""
+        # 1. Validation error (< 50 chars)
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            with self.assertRaises(PangramError) as cm:
+                scan_text_pangram("Short text", api_key="valid-key")
+            self.assertEqual(cm.exception.status_code, 400)
+            self.assertIn("at least 50 characters", cm.exception.message)
+            mock_urlopen.assert_not_called()
+
+        # 2. STAGE_FAILED
+        fail_resps = [
+            _MockHTTPResponse({"task_id": "t-fail"}),
+            _MockHTTPResponse({
+                "task_id": "t-fail",
+                "stage": "STAGE_FAILED",
+                "headline": "Processing failed due to unparseable encoding",
+            }),
+        ]
+        with patch("urllib.request.urlopen", side_effect=fail_resps):
+            long_text = "This text easily satisfies the fifty character requirement for testing failure modes."
+            with self.assertRaises(PangramError) as cm_fail:
+                scan_text_pangram(long_text, api_key="valid-key", poll_s=0.1)
+            self.assertEqual(cm_fail.exception.status_code, 422)
+            self.assertIn("Pangram scan failed", cm_fail.exception.message)
+
+    def test_docx_extraction_routes_through_pangram_4(self) -> None:
+        """scan_file_pangram extracts text from minimal in-memory .docx and routes to pangram-4."""
+        bio = io.BytesIO()
+        with zipfile.ZipFile(bio, "w") as zf:
+            xml = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                '<w:body><w:p><w:r><w:t>'
+                'This is an extracted academic essay from a docx archive that contains more than sixty characters.'
+                '</w:t></w:r></w:p></w:body></w:document>'
+            )
+            zf.writestr("word/document.xml", xml)
+        docx_bytes = bio.getvalue()
+
+        with patch("engine.pangram_client.scan_text_pangram") as mock_scan:
+            mock_scan.return_value = {
+                "scan_type": "text",
+                "task_id": "t-docx",
+                "model": "pangram-4",
+                "fraction_ai": 0.15,
+                "has_humanized_segments": False,
+                "max_humanizer_score": 0.0,
+            }
+            res = scan_file_pangram("essay.docx", docx_bytes, api_key="k", prefer_pangram_4=True)
+            self.assertTrue(mock_scan.called)
+            called_args, called_kwargs = mock_scan.call_args
+            extracted_text = called_args[0]
+            self.assertIn("extracted academic essay from a docx archive", extracted_text)
+            self.assertEqual(called_kwargs.get("model"), "pangram-4")
+            self.assertEqual(called_kwargs.get("api_key"), "k")
+            self.assertEqual(res["scan_type"], "file")
+            self.assertEqual(res["filename"], "essay.docx")
+
+
+class TestAcademicCoach(unittest.TestCase):
+    """Test author-led citation checking and academic clarity diagnostics."""
+
+    def test_citation_check_flags_unquoted_and_rewards_cited_quotes(self) -> None:
+        """Flags verbatim unquoted and close paraphrasing, recognizes cited quotes, and reconstructs draft."""
+        source = (
+            "Machine learning models require substantial computational resources and massive datasets to achieve state of the art performance across domains. "
+            "Deep neural architectures demonstrate remarkable pattern recognition capabilities across diverse domains. "
+            "Algorithmic advances enable researchers to explore intricate multidimensional representations."
+        )
+
+        draft = (
+            "In recent years, computational resources and massive datasets to achieve breakthrough results has become standard. "
+            "Neural architectures demonstrate pattern recognition capabilities across domains. "
+            'In addition, "algorithmic advances enable researchers to explore intricate multidimensional representations." (Smith, 2024)'
+        )
+
+        res = check_source_citations(draft, source)
+
+        # 1. Flag types present
+        flag_types = {m["type"] for m in res["matches"]}
+        self.assertIn("verbatim_unquoted", flag_types)
+        self.assertIn("close_paraphrase", flag_types)
+
+        # 2. Quoted and cited count >= 1
+        self.assertGreaterEqual(res["quoted_cited_count"], 1)
+
+        # 3. Concatenating annotated_segments reconstructs the exact original draft
+        reconstructed = "".join(seg["text"] for seg in res["annotated_segments"])
+        self.assertEqual(reconstructed, draft)
+
+    def test_academic_coach_diagnostics(self) -> None:
+        """Detects passive voice, unattributed claims, vague fillers, and repetitive openers."""
+        draft = (
+            "The experiment was conducted by our laboratory over three months. "
+            "Researchers have shown that consistent measurement reduces anomalies. "
+            "This result occurred due to the fact that temperature remained stable. "
+            "This methodology provides reproducible outcomes across trials."
+        )
+
+        res = coach_academic_draft(draft)
+
+        counts = res["counts"]
+        self.assertGreaterEqual(counts["passive_voice"], 1)
+        self.assertGreaterEqual(counts["unattributed_claim"], 1)
+        self.assertGreaterEqual(counts["vague_filler"], 1)
+        self.assertGreaterEqual(counts["repetitive_opener"], 1)
+        self.assertLess(res["clarity_score"], 90)
+        self.assertGreaterEqual(len(res["sentence_feedback"]), 4)
+
+
 class TestHTTPServer(unittest.TestCase):
     """Test HTTP API routes on an ephemeral server instance with isolated temporary database."""
 
@@ -423,8 +646,11 @@ class TestHTTPServer(unittest.TestCase):
 
     def _get(self, path: str) -> tuple[int, dict[str, str], bytes]:
         req = urllib.request.Request(f"{self.base_url}{path}", method="GET")
-        with urllib.request.urlopen(req) as resp:
-            return resp.status, dict(resp.headers), resp.read()
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, dict(resp.headers), resp.read()
+        except urllib.error.HTTPError as err:
+            return err.code, dict(err.headers), err.read()
 
     def _post(self, path: str, payload: dict | None = None) -> tuple[int, dict[str, str], bytes]:
         data = json.dumps(payload or {}).encode("utf-8")
@@ -434,8 +660,19 @@ class TestHTTPServer(unittest.TestCase):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req) as resp:
-            return resp.status, dict(resp.headers), resp.read()
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, dict(resp.headers), resp.read()
+        except urllib.error.HTTPError as err:
+            return err.code, dict(err.headers), err.read()
+
+    def _delete(self, path: str) -> tuple[int, dict[str, str], bytes]:
+        req = urllib.request.Request(f"{self.base_url}{path}", method="DELETE")
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, dict(resp.headers), resp.read()
+        except urllib.error.HTTPError as err:
+            return err.code, dict(err.headers), err.read()
 
     def test_get_root(self) -> None:
         """GET / serves index.html with 200 OK."""
@@ -508,6 +745,100 @@ class TestHTTPServer(unittest.TestCase):
         self.assertIn("rule", data)
         self.assertEqual(data["rule"]["avoid_text"], "utilize")
         self.assertEqual(data["rule"]["prefer_text"], "use")
+
+    def test_post_academic_citation_check(self) -> None:
+        """POST /api/academic/citation-check returns 200 OK with overall_overlap_pct and annotated_segments."""
+        payload = {
+            "draft_text": "In recent years, computational resources and massive datasets to achieve breakthrough results has become standard.",
+            "source_text": "Machine learning models require substantial computational resources and massive datasets to achieve state of the art.",
+        }
+        status, _, body = self._post("/api/academic/citation-check", payload)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode("utf-8"))
+        self.assertIn("overall_overlap_pct", data)
+        self.assertIn("annotated_segments", data)
+        self.assertIn("matches", data)
+
+    def test_post_academic_coach(self) -> None:
+        """POST /api/academic/coach returns 200 OK with clarity_score and sentence_feedback."""
+        payload = {
+            "draft_text": "The experiment was conducted by our laboratory. Due to the fact that time was limited, researchers have shown that results vary.",
+        }
+        status, _, body = self._post("/api/academic/coach", payload)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode("utf-8"))
+        self.assertIn("clarity_score", data)
+        self.assertIn("sentence_feedback", data)
+        self.assertIn("counts", data)
+
+    def test_post_pangram_scan_without_key_returns_400(self) -> None:
+        """POST /api/pangram/scan without an API key returns HTTP 400 with error message."""
+        update_settings({"pangram_api_key": "", "clear_pangram_api_key": True}, db_path=self.db_path)
+        orig_key = os.environ.pop("PANGRAM_API_KEY", None)
+        try:
+            payload = {
+                "text": "This is a submission that easily exceeds fifty characters in total length for scan.",
+            }
+            status, _, body = self._post("/api/pangram/scan", payload)
+            self.assertEqual(status, 400)
+            data = json.loads(body.decode("utf-8"))
+            self.assertIn("error", data)
+            self.assertIn("API key", data["error"])
+        finally:
+            if orig_key is not None:
+                os.environ["PANGRAM_API_KEY"] = orig_key
+
+    def test_post_pangram_scan_persists_and_deletes(self) -> None:
+        """POST /api/pangram/scan with mock returns 200, persists to pangram_scans, and DELETE removes it."""
+        update_settings({"pangram_api_key": "test_pangram_key_xyz"}, db_path=self.db_path)
+
+        mock_result = {
+            "scan_type": "text",
+            "task_id": "test-task-persisted-1",
+            "stage": "STAGE_SUCCESS",
+            "version": "4.1",
+            "model": "pangram-4",
+            "text": "This is a sufficiently long text submission for automated scanning.",
+            "headline": "Likely AI-generated",
+            "prediction": "AI",
+            "fraction_ai": 0.85,
+            "fraction_ai_assisted": 0.10,
+            "fraction_human": 0.05,
+            "has_humanized_segments": False,
+            "max_humanizer_score": 0.0,
+            "dashboard_link": "https://dashboard.pangram.com/test-task-persisted-1",
+            "windows": [],
+            "estimate": {"word_count": 10, "estimated_cost_usd": 0.005},
+        }
+
+        try:
+            with patch("server.scan_text_pangram", return_value=mock_result):
+                payload = {
+                    "text": "This is a sufficiently long text submission for automated scanning.",
+                    "title": "Automated Unit Test Submission",
+                }
+                status, _, body = self._post("/api/pangram/scan", payload)
+                self.assertEqual(status, 200)
+                data = json.loads(body.decode("utf-8"))
+                self.assertIn("result", data)
+                scan_id = data["result"].get("scan_id")
+                self.assertIsNotNone(scan_id)
+
+                # Verify it is in database
+                scans_in_db = get_pangram_scans(db_path=self.db_path)
+                self.assertTrue(any(s["id"] == scan_id for s in scans_in_db))
+
+                # DELETE /api/pangram/scans/<id> removes it cleanly
+                del_status, _, del_body = self._delete(f"/api/pangram/scans/{scan_id}")
+                self.assertEqual(del_status, 200)
+                del_data = json.loads(del_body.decode("utf-8"))
+                self.assertTrue(del_data.get("deleted"))
+
+                # Verify it is removed from database
+                scans_after = get_pangram_scans(db_path=self.db_path)
+                self.assertFalse(any(s["id"] == scan_id for s in scans_after))
+        finally:
+            update_settings({"pangram_api_key": "", "clear_pangram_api_key": True}, db_path=self.db_path)
 
 
 if __name__ == "__main__":

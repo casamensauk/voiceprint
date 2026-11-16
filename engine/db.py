@@ -26,6 +26,9 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "ollama_model": "llama3.2",
     "active_context_mode": "casual_chat",
     "intensity": "deep",
+    "pangram_api_key": "",
+    "pangram_model": "pangram-4",
+    "pangram_public_link": "false",
 }
 
 
@@ -110,6 +113,23 @@ def init_db(db_path: Path | None = None) -> None:
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS pangram_scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_type TEXT NOT NULL DEFAULT 'text',
+                title TEXT NOT NULL,
+                input_text TEXT NOT NULL,
+                word_count INTEGER NOT NULL,
+                estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
+                headline TEXT NOT NULL,
+                fraction_ai REAL NOT NULL DEFAULT 0.0,
+                fraction_ai_assisted REAL NOT NULL DEFAULT 0.0,
+                fraction_human REAL NOT NULL DEFAULT 0.0,
+                max_humanizer_score REAL NOT NULL DEFAULT 0.0,
+                dashboard_link TEXT NOT NULL DEFAULT '',
+                result_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
             );
             """
         )
@@ -435,6 +455,80 @@ def get_rewrite_history(limit: int = 25, db_path: Path | None = None) -> list[di
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def add_pangram_scan(
+    scan_type: str,
+    title: str,
+    input_text: str,
+    word_count: int,
+    estimated_cost_usd: float,
+    headline: str,
+    fraction_ai: float,
+    fraction_ai_assisted: float,
+    fraction_human: float,
+    max_humanizer_score: float,
+    dashboard_link: str,
+    result_payload: dict[str, Any],
+    db_path: Path | None = None,
+) -> int:
+    """Persist a completed Pangram API scan to avoid paying twice for the same check."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO pangram_scans (
+                scan_type, title, input_text, word_count, estimated_cost_usd,
+                headline, fraction_ai, fraction_ai_assisted, fraction_human,
+                max_humanizer_score, dashboard_link, result_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                scan_type,
+                title,
+                input_text,
+                int(word_count),
+                float(estimated_cost_usd),
+                headline,
+                float(fraction_ai),
+                float(fraction_ai_assisted),
+                float(fraction_human),
+                float(max_humanizer_score),
+                dashboard_link,
+                json.dumps(result_payload),
+                utc_now(),
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def get_pangram_scans(limit: int = 25, db_path: Path | None = None) -> list[dict[str, Any]]:
+    """Return recent Pangram inspection records with parsed JSON payloads."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM pangram_scans ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            d = dict(row)
+            try:
+                d["result"] = json.loads(d.get("result_json") or "{}")
+            except json.JSONDecodeError:
+                d["result"] = {}
+            items.append(d)
+        return items
+
+
+def delete_pangram_scan(scan_id: int, db_path: Path | None = None) -> bool:
+    """Delete a stored Pangram scan record by ID."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        cur = conn.execute("DELETE FROM pangram_scans WHERE id = ?", (scan_id,))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def seed_demo_samples(db_path: Path | None = None) -> dict[str, int]:

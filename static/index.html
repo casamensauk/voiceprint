@@ -118,6 +118,18 @@
         </svg>
         <span>Voice DNA & Rules</span>
       </button>
+      <button type="button" class="tab-btn" data-tab="inspector" id="tab-nav-inspector">
+        <svg viewBox="0 0 20 20" fill="currentColor" class="tab-icon">
+          <path fill-rule="evenodd" d="M9 3a7 7 0 105.196 11.682l3.561 3.562a1 1 0 001.414-1.414l-3.562-3.561A7 7 0 009 3zm-5 7a5 5 0 1110 0 5 5 0 01-10 0z" clip-rule="evenodd"/>
+        </svg>
+        <span>AI &amp; Originality Inspector</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="academic" id="tab-nav-academic">
+        <svg viewBox="0 0 20 20" fill="currentColor" class="tab-icon">
+          <path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a10.974 10.974 0 01-.25 2.449c-.482.28-1 .737-1 1.5 0 1.105 1.79 2 4 2s4-.895 4-2c0-.763-.518-1.22-1-1.5a10.98 10.98 0 01-.25-2.449l2.644-1.131a1 1 0 000-1.84l-7-3zM10 15c-3.314 0-6-1.343-6-3 0-.584.343-1.117.936-1.542C5.908 11.236 7.844 12 10 12c2.156 0 4.092-.764 5.064-1.542.593.425.936.958.936 1.542 0 1.657-2.686 3-6 3z"/>
+        </svg>
+        <span>Source &amp; Revision Coach</span>
+      </button>
       <button type="button" class="tab-btn" data-tab="macos" id="tab-nav-macos">
         <svg viewBox="0 0 20 20" fill="currentColor" class="tab-icon">
           <path fill-rule="evenodd" d="M3 5a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2h-2.22l.123.489.804.804A1 1 0 0113 18H7a1 1 0 01-.707-1.707l.804-.804L7.22 15H5a2 2 0 01-2-2V5zm5.771 7H5V5h10v7H8.771z" clip-rule="evenodd"/>
@@ -919,6 +931,555 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
         </div>
       </section>
 
+      <!-- ======================================================== -->
+      <!-- TAB 5: AI & ORIGINALITY INSPECTOR (PANGRAM LABS PAYG) -->
+      <!-- ======================================================== -->
+      <section class="tab-pane" id="pane-inspector">
+        <div class="inspector-layout">
+
+          <!-- Main Input & Controls Card -->
+          <div class="card inspector-main-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <span class="card-icon-pill pill-indigo">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                    <path fill-rule="evenodd" d="M9 3a7 7 0 105.196 11.682l3.561 3.562a1 1 0 001.414-1.414l-3.562-3.561A7 7 0 009 3zm-5 7a5 5 0 1110 0 5 5 0 01-10 0z" clip-rule="evenodd"/>
+                  </svg>
+                </span>
+                <div>
+                  <h2 class="card-title">AI &amp; Originality Inspector</h2>
+                  <p class="card-subtitle">Enterprise-grade multi-window AI &amp; humanizer detection via Pangram Labs ($0.05 / 100 words PAYG)</p>
+                </div>
+              </div>
+
+              <!-- Top Action Bar -->
+              <div class="inspector-action-bar">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-inspector-clipboard" title="Paste text from macOS clipboard">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                    <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/>
+                    <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"/>
+                  </svg>
+                  <span>Grab macOS Clipboard</span>
+                </button>
+
+                <!-- Hidden file input for file upload -->
+                <input type="file" id="file-inspector-upload" accept=".docx,.pdf,.rtf,.txt" style="display: none;">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-inspector-upload" title="Upload .docx, .pdf, .rtf, or .txt file">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                    <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+                  </svg>
+                  <span>Upload File (.docx, .pdf, .rtf, .txt)</span>
+                </button>
+
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-inspector-sample" title="Load sample text with mixed AI & Humanizer patterns">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                    <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z"/>
+                  </svg>
+                  <span>Load Sample Submission</span>
+                </button>
+
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-inspector-settings" title="Configure Pangram API Key">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                    <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/>
+                  </svg>
+                  <span>Settings / API Key</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <!-- Textarea and Counter Bar -->
+              <div class="inspector-input-wrapper">
+                <textarea id="inspector-input" class="form-textarea inspector-textarea" rows="8" placeholder="Paste draft, essay, or coursework to scan with Pangram 4, run web plagiarism indexing, or test with $0 local pre-scan..."></textarea>
+                
+                <div class="inspector-meta-bar">
+                  <div class="inspector-meta-left">
+                    <span id="inspector-word-count" class="font-mono text-muted">0 words</span>
+                    <span class="meta-sep">•</span>
+                    <span id="inspector-char-count" class="font-mono text-muted">0 chars</span>
+                    <span class="meta-sep">•</span>
+                    <span id="inspector-readiness-pill" class="inspector-pill-readiness pill-warning">Requires ≥50 chars</span>
+                  </div>
+                  <div class="inspector-meta-right">
+                    <span class="cost-estimator-label">PAYG Rate: <span class="text-muted">$0.05 / 100w</span></span>
+                    <span class="meta-sep">•</span>
+                    <span id="inspector-cost-est" class="inspector-cost-pill font-mono">Est. ~$0.00 USD</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Controls Row -->
+              <div class="inspector-controls-row">
+                <div class="inspector-controls-left">
+                  <div class="form-group-inline">
+                    <label for="inspector-model-select" class="form-label-inline">Model:</label>
+                    <select id="inspector-model-select" class="form-select form-select-sm">
+                      <option value="pangram-4">pangram-4 (Multi-Signal &amp; Humanizer)</option>
+                      <option value="default">default (Baseline)</option>
+                    </select>
+                  </div>
+
+                  <label class="checkbox-label" for="inspector-shareable-link" title="Creates a public dashboard link on Pangram Labs servers for 3rd-party verification">
+                    <input type="checkbox" id="inspector-shareable-link">
+                    <span>Shareable Pangram Link</span>
+                  </label>
+
+                  <input type="text" id="inspector-doc-title" class="form-input form-input-sm" placeholder="Optional submission title" style="max-width: 220px;">
+                </div>
+
+                <div class="inspector-controls-right">
+                  <button type="button" class="btn btn-secondary" id="btn-run-free-prescan" title="Run instant offline heuristic and Voice DNA scan at $0 before spending Pangram credits">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon text-emerald">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/>
+                    </svg>
+                    <span>Free Local Signal Pre-Scan ($0)</span>
+                  </button>
+
+                  <button type="button" class="btn btn-secondary" id="btn-run-plagiarism-scan" title="Cross-reference text against Pangram's web plagiarism database">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon text-amber">
+                      <path fill-rule="evenodd" d="M4.083 9h1.946c.089-1.546.383-2.97.837-4.118A6.004 6.004 0 004.083 9zM10 2a8 8 0 100 16 8 8 0 000-16zm0 2c-.076 0-.232.032-.465.262-.238.234-.497.623-.737 1.182-.389.907-.673 2.142-.766 3.556h3.936c-.093-1.414-.377-2.649-.766-3.556-.24-.56-.5-.948-.737-1.182C10.232 4.032 10.076 4 10 4zm3.971 5c-.089-1.546-.383-2.97-.837-4.118A6.004 6.004 0 0115.917 9h-1.946zm-7.888 2H4.083a6.004 6.004 0 002.763 4.118c-.454-1.147-.748-2.571-.837-4.118zm1.946 0c.093 1.414.377 2.649.766 3.556.24.56.5.948.737 1.182.233.23.389.262.465.262.076 0 .232-.032.465-.262.238-.234.497-.623.737-1.182.389-.907.673-2.142.766-3.556H8.029zm5.888 0h1.946a6.004 6.004 0 01-2.763 4.118c.454-1.147.748-2.571.837-4.118z" clip-rule="evenodd"/>
+                    </svg>
+                    <span>Web Plagiarism Check</span>
+                  </button>
+
+                  <button type="button" class="btn btn-primary" id="btn-run-pangram-scan">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                      <path fill-rule="evenodd" d="M10 1.944A11.954 11.954 0 012.166 5C2.056 5.649 2 6.319 2 7c0 5.225 3.34 9.67 8 11.317C14.66 16.67 18 12.225 18 7c0-.682-.057-1.35-.166-2.001A11.954 11.954 0 0110 1.944zM11 14a1 1 0 11-2 0 1 1 0 012 0zm0-7a1 1 0 10-2 0v3a1 1 0 102 0V7z" clip-rule="evenodd"/>
+                    </svg>
+                    <span>Scan with Pangram 4</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Local Pre-Scan Box (hidden by default, shown when Free Pre-Scan is run) -->
+              <div id="inspector-prescan-box" class="inspector-prescan-alert" style="display: none;">
+                <div class="prescan-head">
+                  <div class="prescan-title">
+                    <span class="status-dot-pulse"></span>
+                    <strong>Zero-Cost Local Heuristic Pre-Scan:</strong>
+                    <span id="prescan-summary-text" class="text-muted">Analyzing local signals...</span>
+                  </div>
+                  <button type="button" class="btn-close-sm" id="btn-close-prescan">×</button>
+                </div>
+                <div class="prescan-stats-row">
+                  <div class="prescan-stat-chip">
+                    <span class="stat-label">Local Human Score:</span>
+                    <strong id="prescan-human-score" class="font-mono text-emerald">--%</strong>
+                  </div>
+                  <div class="prescan-stat-chip">
+                    <span class="stat-label">AI Risk Score:</span>
+                    <strong id="prescan-ai-risk" class="font-mono text-rose">--%</strong>
+                  </div>
+                  <div class="prescan-stat-chip">
+                    <span class="stat-label">Burstiness:</span>
+                    <strong id="prescan-burstiness" class="font-mono">--</strong>
+                  </div>
+                  <div class="prescan-stat-chip">
+                    <span class="stat-label">AI Clichés Detected:</span>
+                    <strong id="prescan-flags-count" class="font-mono text-amber">0</strong>
+                  </div>
+                </div>
+                <div id="prescan-flags-list" class="prescan-flags-container"></div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Results Section -->
+          <div class="card inspector-results-card" id="inspector-results">
+            <!-- Empty state when no scan loaded -->
+            <div id="inspector-empty-state" class="inspector-empty-placeholder">
+              <div class="empty-icon-circle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="w-8 h-8 text-muted">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <path d="m21 21-4.35-4.35"></path>
+                </svg>
+              </div>
+              <h3 class="empty-title">Ready for Originality Inspection</h3>
+              <p class="empty-desc">
+                Paste draft text or upload a document to inspect with Pangram 4. You can also run a <strong>Free Local Signal Pre-Scan ($0)</strong> before spending credits.
+              </p>
+            </div>
+
+            <!-- Active Scan Results (hidden until scan or loaded from history) -->
+            <div id="inspector-active-results" style="display: none;">
+              <!-- Headline Banner -->
+              <div class="inspector-headline-banner">
+                <div class="headline-left">
+                  <span id="inspector-headline-badge" class="inspector-verdict-badge verdict-neutral">Pending</span>
+                  <div class="headline-info">
+                    <h3 id="inspector-headline-title" class="headline-title">Analysis Completed</h3>
+                    <p id="inspector-headline-prediction" class="headline-prediction text-muted"></p>
+                  </div>
+                </div>
+                <div class="headline-right">
+                  <span id="inspector-model-badge" class="badge-neutral font-mono">pangram-4</span>
+                  <a id="inspector-dashboard-link" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" style="display: none;">
+                    <span>Open Pangram Report ↗</span>
+                  </a>
+                </div>
+              </div>
+
+              <!-- 3-Segment Stacked Meter -->
+              <div class="meter-wrapper">
+                <div class="meter-labels-row">
+                  <span class="meter-label text-rose"><span class="legend-dot bg-rose"></span> Pure AI: <strong id="lbl-meter-ai">0%</strong></span>
+                  <span class="meter-label text-amber"><span class="legend-dot bg-amber"></span> AI-Assisted: <strong id="lbl-meter-assisted">0%</strong></span>
+                  <span class="meter-label text-emerald"><span class="legend-dot bg-emerald"></span> Human: <strong id="lbl-meter-human">0%</strong></span>
+                </div>
+                <div class="stacked-meter-track">
+                  <div id="meter-segment-ai" class="meter-segment segment-ai" style="width: 0%;" title="Pure AI"></div>
+                  <div id="meter-segment-assisted" class="meter-segment segment-assisted" style="width: 0%;" title="AI-Assisted"></div>
+                  <div id="meter-segment-human" class="meter-segment segment-human" style="width: 0%;" title="Human Original"></div>
+                </div>
+              </div>
+
+              <!-- 4 Stat Metric Cards -->
+              <div class="inspector-stats-grid">
+                <div class="inspector-stat-card card-stat-ai">
+                  <div class="stat-card-title">Pure AI Fraction</div>
+                  <div id="card-val-ai" class="stat-card-value font-mono text-rose">0.0%</div>
+                  <div id="card-sub-ai" class="stat-card-sub text-muted">0 segments</div>
+                </div>
+
+                <div class="inspector-stat-card card-stat-assisted">
+                  <div class="stat-card-title">AI-Assisted Fraction</div>
+                  <div id="card-val-assisted" class="stat-card-value font-mono text-amber">0.0%</div>
+                  <div id="card-sub-assisted" class="stat-card-sub text-muted">0 segments</div>
+                </div>
+
+                <div class="inspector-stat-card card-stat-human">
+                  <div class="stat-card-title">Human Original</div>
+                  <div id="card-val-human" class="stat-card-value font-mono text-emerald">0.0%</div>
+                  <div id="card-sub-human" class="stat-card-sub text-muted">0 segments</div>
+                </div>
+
+                <div class="inspector-stat-card card-stat-humanizer">
+                  <div class="stat-card-title">Humanizer Detection</div>
+                  <div id="card-val-humanizer" class="stat-card-value font-mono">Clean</div>
+                  <div id="card-sub-humanizer" class="stat-card-sub text-muted">Max score: 0.00</div>
+                </div>
+              </div>
+
+              <!-- Highlighted Submission Viewer -->
+              <div class="card mt-4">
+                <div class="card-header">
+                  <div class="card-title-group">
+                    <h4 class="card-title">Highlighted Submission &amp; Window Segments</h4>
+                    <span class="card-subtitle">Visual classification per text window</span>
+                  </div>
+                  <div class="legend-pills">
+                    <span class="legend-pill pill-ai"><span class="legend-dot bg-rose"></span> AI</span>
+                    <span class="legend-pill pill-assisted"><span class="legend-dot bg-amber"></span> AI-Assisted</span>
+                    <span class="legend-pill pill-human"><span class="legend-dot bg-emerald"></span> Human</span>
+                    <span class="legend-pill pill-humanizer"><span class="legend-dot bg-cyan"></span> Humanizer Detected</span>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div id="inspector-highlighted-text" class="highlighted-text-container font-mono"></div>
+                </div>
+              </div>
+
+              <!-- Window Breakdown Details List -->
+              <div class="card mt-4">
+                <div class="card-header">
+                  <h4 class="card-title">Window Diagnostic Breakdown</h4>
+                  <span id="inspector-windows-count" class="card-subtitle">0 windows analyzed</span>
+                </div>
+                <div class="card-body">
+                  <div id="inspector-windows-list" class="inspector-windows-container"></div>
+                </div>
+              </div>
+
+              <!-- Web Plagiarism Section (Shown if plagiarism check run) -->
+              <div id="inspector-plagiarism-section" class="card mt-4" style="display: none;">
+                <div class="card-header">
+                  <div class="card-title-group">
+                    <h4 class="card-title">Web Plagiarism Matches</h4>
+                    <span id="inspector-plagiarism-score-badge" class="badge-neutral font-mono">0% Overlap</span>
+                  </div>
+                  <span id="inspector-plagiarism-status" class="text-xs text-muted">Web Indexing Scan</span>
+                </div>
+                <div class="card-body">
+                  <div id="inspector-plagiarism-matches" class="plagiarism-matches-container"></div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Saved Pangram Scan History Card -->
+          <div class="card inspector-history-card mt-4">
+            <div class="card-header">
+              <div class="card-title-group">
+                <span class="card-icon-pill">
+                  <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/>
+                  </svg>
+                </span>
+                <div>
+                  <h3 class="card-title">Saved Pangram Scan History</h3>
+                  <p class="card-subtitle">Past scans saved in local SQLite — load any prior result instantly at $0 cost</p>
+                </div>
+              </div>
+              <span id="inspector-history-count" class="badge-neutral text-xs">0 scans saved</span>
+            </div>
+            <div class="card-body">
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 140px;">Date</th>
+                      <th>Submission / Title</th>
+                      <th style="width: 100px;">Type</th>
+                      <th style="width: 180px;">Result Summary</th>
+                      <th style="width: 100px;">Est. Cost</th>
+                      <th style="width: 140px; text-align: right;">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="inspector-history-tbody">
+                    <tr>
+                      <td colspan="6" class="text-center text-muted" style="padding: 24px;">No saved Pangram scans yet. Run a scan to build history.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ======================================================== -->
+      <!-- TAB 6: SOURCE & REVISION COACH (ACADEMIC INTEGRITY) -->
+      <!-- ======================================================== -->
+      <section class="tab-pane" id="pane-academic">
+        <div class="academic-layout">
+
+          <!-- Top Action Bar & Banner -->
+          <div class="academic-top-bar">
+            <div>
+              <h2 class="academic-title">Source &amp; Revision Coach</h2>
+              <p class="academic-subtitle">Author-led academic integrity: verify source citations, prevent accidental plagiarism, and strengthen prose clarity without AI ghostwriting.</p>
+            </div>
+            <div class="academic-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-acad-sample" title="Load sample student coursework and reference source">
+                <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                  <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z"/>
+                </svg>
+                <span>Load Example Coursework &amp; Source</span>
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-acad-clipboard" title="Grab macOS clipboard text into Student Draft">
+                <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                  <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/>
+                  <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"/>
+                </svg>
+                <span>Grab Clipboard into Draft</span>
+              </button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-acad-clear">Clear</button>
+            </div>
+          </div>
+
+          <!-- Two-Column Input Section -->
+          <div class="academic-inputs-grid">
+            
+            <!-- Left: Student Draft Input -->
+            <div class="card academic-input-card">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <span class="card-icon-pill pill-indigo">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                      <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/>
+                    </svg>
+                  </span>
+                  <div>
+                    <h3 class="card-title">Student Draft Text</h3>
+                    <p class="card-subtitle">Your essay, literature review, or manuscript draft</p>
+                  </div>
+                </div>
+                <div class="font-mono text-xs text-muted">
+                  <span id="acad-draft-word-count">0 words</span>
+                </div>
+              </div>
+              <div class="card-body">
+                <textarea id="acad-draft-input" class="form-textarea font-mono" rows="10" placeholder="Paste your academic draft here..."></textarea>
+                <div class="academic-card-actions mt-3">
+                  <button type="button" class="btn btn-secondary" id="btn-run-coach">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon text-indigo">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-8.707l-3-3a1 1 0 00-1.414 0l-3 3a1 1 0 001.414 1.414L9 9.414V13a1 1 0 102 0V9.414l1.293 1.293a1 1 0 001.414-1.414z" clip-rule="evenodd"/>
+                    </svg>
+                    <span>Run Academic Revision Coach</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right: Reference Source Input -->
+            <div class="card academic-input-card">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <span class="card-icon-pill">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                      <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clip-rule="evenodd"/>
+                    </svg>
+                  </span>
+                  <div>
+                    <h3 class="card-title">Source / Reference Text</h3>
+                    <p class="card-subtitle">Journal excerpt, textbook chapter, or assignment source</p>
+                  </div>
+                </div>
+                <div class="font-mono text-xs text-muted">
+                  <span id="acad-source-word-count">0 words</span>
+                </div>
+              </div>
+              <div class="card-body">
+                <textarea id="acad-source-input" class="form-textarea font-mono" rows="10" placeholder="Paste the source material or cited reference to check for overlap &amp; attribution..."></textarea>
+                <div class="academic-card-actions mt-3" style="display: flex; gap: 8px;">
+                  <button type="button" class="btn btn-secondary" id="btn-run-citation-check">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon text-amber">
+                      <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                    </svg>
+                    <span>Check Source Overlap &amp; Citations</span>
+                  </button>
+                  <button type="button" class="btn btn-primary" id="btn-run-both-acad">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
+                      <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/>
+                    </svg>
+                    <span>Run Both Checks</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Two-Column Results Section -->
+          <div class="academic-results-grid mt-4" id="acad-results-container">
+            
+            <!-- Left Result: Source Overlap & Citation Check Report -->
+            <div class="card academic-report-card" id="acad-citation-report">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h3 class="card-title">Source &amp; Citation Check Report</h3>
+                  <span id="acad-status-badge" class="badge-neutral text-xs">Awaiting Analysis</span>
+                </div>
+                <div class="d-flex align-center gap-2">
+                  <span class="text-xs text-muted">Overlap:</span>
+                  <span id="acad-overlap-badge" class="font-mono text-emerald" style="font-weight: 700; font-size: 14px;">0.0%</span>
+                </div>
+              </div>
+              <div class="card-body">
+                <div id="acad-citation-empty" class="text-center text-muted" style="padding: 32px 16px;">
+                  Paste both Student Draft and Source Text above, then click <strong>Check Source Overlap &amp; Citations</strong>.
+                </div>
+                
+                <div id="acad-citation-body" style="display: none;">
+                  <!-- Stats Row -->
+                  <div class="acad-summary-bar">
+                    <div class="acad-summary-item">
+                      <span class="text-muted text-xs">Status:</span>
+                      <strong id="acad-status-label" class="text-emerald">Clean Attribution</strong>
+                    </div>
+                    <div class="acad-summary-item">
+                      <span class="text-muted text-xs">Quoted &amp; Cited Ranges:</span>
+                      <strong id="acad-quoted-count" class="font-mono">0</strong>
+                    </div>
+                    <div class="acad-summary-item">
+                      <span class="text-muted text-xs">Flagged Matches:</span>
+                      <strong id="acad-matches-count" class="font-mono text-rose">0</strong>
+                    </div>
+                  </div>
+
+                  <!-- Annotated Draft Box -->
+                  <div class="mt-3">
+                    <label class="form-label" style="display: flex; justify-content: space-between; align-items: center;">
+                      <span>Annotated Draft Alignment</span>
+                      <span class="text-xs text-muted">Quoted (Green) • Verbatim (Red) • Paraphrase (Amber)</span>
+                    </label>
+                    <div id="acad-annotated-draft" class="annotated-text-viewer font-mono"></div>
+                  </div>
+
+                  <!-- Flagged Matches Details -->
+                  <div class="mt-4">
+                    <label class="form-label">Overlap Regions &amp; Guidance</label>
+                    <div id="acad-matches-list" class="acad-matches-container"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Result: Academic Revision Coach Diagnostics -->
+            <div class="card academic-report-card" id="acad-coach-report">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h3 class="card-title">Academic Revision Coach</h3>
+                  <span class="card-subtitle">Author-Led Clarity Diagnostics</span>
+                </div>
+                <div class="d-flex align-center gap-2">
+                  <span class="text-xs text-muted">Clarity Score:</span>
+                  <span id="acad-clarity-score" class="font-mono text-indigo" style="font-weight: 700; font-size: 16px;">--/100</span>
+                </div>
+              </div>
+              <div class="card-body">
+                <div id="acad-coach-empty" class="text-center text-muted" style="padding: 32px 16px;">
+                  Paste your draft above and click <strong>Run Academic Revision Coach</strong> to receive structural and clarity diagnostics.
+                </div>
+
+                <div id="acad-coach-body" style="display: none;">
+                  <!-- 5 Issue Category Pills -->
+                  <div class="acad-issue-pills-row">
+                    <div class="acad-issue-pill">
+                      <span class="pill-title">Passive Voice</span>
+                      <span id="acad-count-passive" class="font-mono pill-count">0</span>
+                    </div>
+                    <div class="acad-issue-pill">
+                      <span class="pill-title">Unattributed Claim</span>
+                      <span id="acad-count-unattributed" class="font-mono pill-count">0</span>
+                    </div>
+                    <div class="acad-issue-pill">
+                      <span class="pill-title">Vague Filler</span>
+                      <span id="acad-count-filler" class="font-mono pill-count">0</span>
+                    </div>
+                    <div class="acad-issue-pill">
+                      <span class="pill-title">Repetitive Opener</span>
+                      <span id="acad-count-opener" class="font-mono pill-count">0</span>
+                    </div>
+                    <div class="acad-issue-pill">
+                      <span class="pill-title">Long Sentence (&gt;35w)</span>
+                      <span id="acad-count-long" class="font-mono pill-count">0</span>
+                    </div>
+                  </div>
+
+                  <!-- Author Guidance Banner -->
+                  <div class="academic-policy-banner mt-3">
+                    <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 text-emerald">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                    </svg>
+                    <div>
+                      <strong>Author-Led Integrity:</strong> VoicePrint does not ghostwrite or automatically rewrite your coursework. You retain complete authorial voice and academic credit.
+                    </div>
+                  </div>
+
+                  <!-- Priority Actions -->
+                  <div class="mt-3">
+                    <label class="form-label">Priority Revision Steps</label>
+                    <ul id="acad-priority-actions" class="acad-priority-list"></ul>
+                  </div>
+
+                  <!-- Sentence-by-Sentence Diagnostics -->
+                  <div class="mt-4">
+                    <label class="form-label">Sentence-by-Sentence Diagnostics</label>
+                    <div id="acad-coach-list" class="acad-sentence-container"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+      </section>
+
     </main>
 
     <!-- Global Toast Container -->
@@ -1043,6 +1604,44 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                 <div class="form-group">
                   <label for="setting-ollama-model" class="form-label">Model Tag</label>
                   <input type="text" id="setting-ollama-model" class="form-input" placeholder="llama3.2">
+                </div>
+              </div>
+            </div>
+
+            <!-- Pangram Labs Card (AI & Plagiarism Inspector — Pay-As-You-Go) -->
+            <div class="provider-config-card" id="card-setting-pangram">
+              <div class="provider-card-head">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span class="provider-card-name">Pangram Labs</span>
+                  <span class="text-xs text-muted">(AI &amp; Plagiarism Inspector — Pay-As-You-Go)</span>
+                </div>
+                <span class="provider-status-badge badge-unconfigured" id="badge-pangram">Not Configured</span>
+              </div>
+              <p class="text-sm text-muted" style="margin-bottom: 10px;">
+                Powers state-of-the-art <code>pangram-4</code> multi-signal AI detection, humanizer scrubbing evasion detection, and web plagiarism scanning at $0.05 / 100 words PAYG.
+              </p>
+              <div class="form-row form-grid-2">
+                <div class="form-group">
+                  <label for="setting-pangram-key" class="form-label">Pangram API Key (<code>x-api-key</code>)</label>
+                  <div class="input-with-action">
+                    <input type="password" id="setting-pangram-key" class="form-input" placeholder="Leave blank to keep existing key" autocomplete="off">
+                    <button type="button" class="btn btn-ghost btn-sm text-rose" id="btn-clear-pangram" title="Clear saved Pangram key">Clear</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btn-test-pangram" title="Verify Pangram key and connectivity">Test Key</button>
+                  </div>
+                  <span class="field-hint">Key is securely saved to local SQLite and never sent anywhere except Pangram's API endpoints.</span>
+                </div>
+                <div class="form-group">
+                  <label for="setting-pangram-model" class="form-label">Default Model</label>
+                  <select id="setting-pangram-model" class="form-select">
+                    <option value="pangram-4">pangram-4 (Recommended: multi-window, humanizer detection)</option>
+                    <option value="default">default (Standard Baseline)</option>
+                  </select>
+                  <div style="margin-top: 10px;">
+                    <label class="checkbox-label" for="setting-pangram-public-link" style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-main); cursor: pointer;">
+                      <input type="checkbox" id="setting-pangram-public-link">
+                      <span>Generate shareable Pangram report link by default</span>
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>

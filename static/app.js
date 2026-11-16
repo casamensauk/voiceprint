@@ -20,6 +20,8 @@
     rules: [],
     editPairs: [],
     history: [],
+    pangramScans: [],
+    lastPangramResult: null,
     maturity: {
       score: 0,
       label: "Seedling",
@@ -35,11 +37,21 @@
       gemini: false,
       openai: false,
       anthropic: false,
+      pangram: false,
     },
   };
 
   const SAMPLE_AI_PARAGRAPH =
     "In today's fast-paced digital age, it is important to note that artificial intelligence has become a multifaceted tapestry of innovation. By leveraging cutting-edge solutions, organizations can seamlessly elevate their workflows and foster unprecedented synergy. Furthermore, delving into this transformative landscape serves as a testament to human ingenuity. Needless to say, not only does this empower teams, but it also optimizes efficiency across the board.";
+
+  const SAMPLE_INSPECTOR_SUBMISSION =
+    "In today's fast-paced digital era, artificial intelligence has fundamentally revolutionized the landscape of contemporary work. By seamlessly integrating cutting-edge machine learning models into everyday workflows, enterprises can unlock unprecedented levels of productivity and innovation. Furthermore, it is important to remember that human-in-the-loop oversight serves as a vital safeguard against hallucinations and ethical pitfalls. Ultimately, embracing this transformative paradigm shift empowers individuals to transcend routine tasks and delve into creative problem-solving across diverse industries.";
+
+  const SAMPLE_ACADEMIC_DRAFT =
+    "In modern society, many scholars argue that neural language models exhibit profound transformative effects on cognitive workflows (Vaswani et al., 2017). Due to the fact that deep architectures capture intricate statistical regularities across massive corpora, organizations are enabled to streamline repetitive authoring. However, research suggests that algorithmic outputs frequently perpetuate latent historical biases without authorial intentionality. In this paper, we investigate the empirical trade-offs between automated drafting and human voice fidelity.";
+
+  const SAMPLE_ACADEMIC_SOURCE =
+    "Neural language models exhibit profound transformative effects on cognitive workflows by capturing intricate statistical regularities across massive text corpora. Although organizations can streamline repetitive drafting, algorithmic outputs frequently perpetuate latent historical biases without explicit human intent. We demonstrate the practical necessity of continuous authorial calibration.";
 
   let sourceDebounceTimer = null;
   let outputDebounceTimer = null;
@@ -181,6 +193,105 @@
     dom.btnClearAnthropic = document.getElementById("btn-clear-anthropic");
     dom.settingOllamaUrl = document.getElementById("setting-ollama-url");
     dom.settingOllamaModel = document.getElementById("setting-ollama-model");
+    dom.badgePangram = document.getElementById("badge-pangram");
+    dom.settingPangramKey = document.getElementById("setting-pangram-key");
+    dom.btnClearPangram = document.getElementById("btn-clear-pangram");
+    dom.btnTestPangram = document.getElementById("btn-test-pangram");
+    dom.settingPangramModel = document.getElementById("setting-pangram-model");
+    dom.settingPangramPublicLink = document.getElementById("setting-pangram-public-link");
+
+    // Tab 5: AI & Originality Inspector
+    dom.btnNavInspector = document.getElementById("tab-nav-inspector");
+    dom.paneInspector = document.getElementById("pane-inspector");
+    dom.inspectorInput = document.getElementById("inspector-input");
+    dom.inspectorWordCount = document.getElementById("inspector-word-count");
+    dom.inspectorCharCount = document.getElementById("inspector-char-count");
+    dom.inspectorReadinessPill = document.getElementById("inspector-readiness-pill");
+    dom.inspectorCostEst = document.getElementById("inspector-cost-est");
+    dom.btnInspectorClipboard = document.getElementById("btn-inspector-clipboard");
+    dom.btnInspectorUpload = document.getElementById("btn-inspector-upload");
+    dom.fileInspectorUpload = document.getElementById("file-inspector-upload");
+    dom.btnInspectorSample = document.getElementById("btn-inspector-sample");
+    dom.btnInspectorSettings = document.getElementById("btn-inspector-settings");
+    dom.inspectorModelSelect = document.getElementById("inspector-model-select");
+    dom.inspectorShareableLink = document.getElementById("inspector-shareable-link");
+    dom.inspectorDocTitle = document.getElementById("inspector-doc-title");
+    dom.btnRunFreePrescan = document.getElementById("btn-run-free-prescan");
+    dom.btnRunPlagiarismScan = document.getElementById("btn-run-plagiarism-scan");
+    dom.btnRunPangramScan = document.getElementById("btn-run-pangram-scan");
+    dom.inspectorPrescanBox = document.getElementById("inspector-prescan-box");
+    dom.prescanSummaryText = document.getElementById("prescan-summary-text");
+    dom.btnClosePrescan = document.getElementById("btn-close-prescan");
+    dom.prescanHumanScore = document.getElementById("prescan-human-score");
+    dom.prescanAiRisk = document.getElementById("prescan-ai-risk");
+    dom.prescanBurstiness = document.getElementById("prescan-burstiness");
+    dom.prescanFlagsCount = document.getElementById("prescan-flags-count");
+    dom.prescanFlagsList = document.getElementById("prescan-flags-list");
+    dom.inspectorEmptyState = document.getElementById("inspector-empty-state");
+    dom.inspectorActiveResults = document.getElementById("inspector-active-results");
+    dom.inspectorHeadlineBadge = document.getElementById("inspector-headline-badge");
+    dom.inspectorHeadlineTitle = document.getElementById("inspector-headline-title");
+    dom.inspectorHeadlinePrediction = document.getElementById("inspector-headline-prediction");
+    dom.inspectorModelBadge = document.getElementById("inspector-model-badge");
+    dom.inspectorDashboardLink = document.getElementById("inspector-dashboard-link");
+    dom.lblMeterAi = document.getElementById("lbl-meter-ai");
+    dom.lblMeterAssisted = document.getElementById("lbl-meter-assisted");
+    dom.lblMeterHuman = document.getElementById("lbl-meter-human");
+    dom.meterSegmentAi = document.getElementById("meter-segment-ai");
+    dom.meterSegmentAssisted = document.getElementById("meter-segment-assisted");
+    dom.meterSegmentHuman = document.getElementById("meter-segment-human");
+    dom.cardValAi = document.getElementById("card-val-ai");
+    dom.cardSubAi = document.getElementById("card-sub-ai");
+    dom.cardValAssisted = document.getElementById("card-val-assisted");
+    dom.cardSubAssisted = document.getElementById("card-sub-assisted");
+    dom.cardValHuman = document.getElementById("card-val-human");
+    dom.cardSubHuman = document.getElementById("card-sub-human");
+    dom.cardValHumanizer = document.getElementById("card-val-humanizer");
+    dom.cardSubHumanizer = document.getElementById("card-sub-humanizer");
+    dom.inspectorHighlightedText = document.getElementById("inspector-highlighted-text");
+    dom.inspectorWindowsCount = document.getElementById("inspector-windows-count");
+    dom.inspectorWindowsList = document.getElementById("inspector-windows-list");
+    dom.inspectorPlagiarismSection = document.getElementById("inspector-plagiarism-section");
+    dom.inspectorPlagiarismScoreBadge = document.getElementById("inspector-plagiarism-score-badge");
+    dom.inspectorPlagiarismStatus = document.getElementById("inspector-plagiarism-status");
+    dom.inspectorPlagiarismMatches = document.getElementById("inspector-plagiarism-matches");
+    dom.inspectorHistoryCount = document.getElementById("inspector-history-count");
+    dom.inspectorHistoryTbody = document.getElementById("inspector-history-tbody");
+
+    // Tab 6: Source & Revision Coach
+    dom.btnNavAcademic = document.getElementById("tab-nav-academic");
+    dom.paneAcademic = document.getElementById("pane-academic");
+    dom.btnAcadSample = document.getElementById("btn-acad-sample");
+    dom.btnAcadClipboard = document.getElementById("btn-acad-clipboard");
+    dom.btnAcadClear = document.getElementById("btn-acad-clear");
+    dom.acadDraftInput = document.getElementById("acad-draft-input");
+    dom.acadDraftWordCount = document.getElementById("acad-draft-word-count");
+    dom.btnRunCoach = document.getElementById("btn-run-coach");
+    dom.acadSourceInput = document.getElementById("acad-source-input");
+    dom.acadSourceWordCount = document.getElementById("acad-source-word-count");
+    dom.btnRunCitationCheck = document.getElementById("btn-run-citation-check");
+    dom.btnRunBothAcad = document.getElementById("btn-run-both-acad");
+    dom.acadCitationReport = document.getElementById("acad-citation-report");
+    dom.acadStatusBadge = document.getElementById("acad-status-badge");
+    dom.acadOverlapBadge = document.getElementById("acad-overlap-badge");
+    dom.acadCitationEmpty = document.getElementById("acad-citation-empty");
+    dom.acadCitationBody = document.getElementById("acad-citation-body");
+    dom.acadStatusLabel = document.getElementById("acad-status-label");
+    dom.acadQuotedCount = document.getElementById("acad-quoted-count");
+    dom.acadMatchesCount = document.getElementById("acad-matches-count");
+    dom.acadAnnotatedDraft = document.getElementById("acad-annotated-draft");
+    dom.acadMatchesList = document.getElementById("acad-matches-list");
+    dom.acadCoachReport = document.getElementById("acad-coach-report");
+    dom.acadClarityScore = document.getElementById("acad-clarity-score");
+    dom.acadCoachEmpty = document.getElementById("acad-coach-empty");
+    dom.acadCoachBody = document.getElementById("acad-coach-body");
+    dom.acadCountPassive = document.getElementById("acad-count-passive");
+    dom.acadCountUnattributed = document.getElementById("acad-count-unattributed");
+    dom.acadCountFiller = document.getElementById("acad-count-filler");
+    dom.acadCountOpener = document.getElementById("acad-count-opener");
+    dom.acadCountLong = document.getElementById("acad-count-long");
+    dom.acadPriorityActions = document.getElementById("acad-priority-actions");
+    dom.acadCoachList = document.getElementById("acad-coach-list");
 
     // Toast Container
     dom.toastContainer = document.getElementById("toast-container");
@@ -346,6 +457,7 @@
     if (data.edit_pairs) appState.editPairs = data.edit_pairs;
     if (data.history) appState.history = data.history;
     if (data.maturity) appState.maturity = data.maturity;
+    if (data.pangram_scans) appState.pangramScans = data.pangram_scans;
 
     if (appState.settings.intensity) {
       appState.intensity = appState.settings.intensity;
@@ -358,6 +470,7 @@
     renderSamplesTab();
     renderRulesTab();
     renderHistoryAndPairs();
+    renderPangramHistory();
     renderSettingsModal();
   }
 
@@ -787,6 +900,23 @@
     // Ollama
     if (dom.settingOllamaUrl) dom.settingOllamaUrl.value = s.ollama_url || "http://localhost:11434";
     if (dom.settingOllamaModel) dom.settingOllamaModel.value = s.ollama_model || "llama3.2";
+
+    // Pangram Labs (Pay-As-You-Go)
+    if (dom.settingPangramModel) {
+      dom.settingPangramModel.value = s.pangram_model || "pangram-4";
+    }
+    if (dom.settingPangramPublicLink) {
+      dom.settingPangramPublicLink.checked = s.pangram_public_link === "true" || s.pangram_public_link === true;
+    }
+    if (dom.badgePangram) {
+      if (s.pangram_api_key_configured) {
+        dom.badgePangram.textContent = `Configured (${s.pangram_api_key_preview || "••••"})`;
+        dom.badgePangram.className = "provider-status-badge badge-configured";
+      } else {
+        dom.badgePangram.textContent = "Not Configured";
+        dom.badgePangram.className = "provider-status-badge badge-unconfigured";
+      }
+    }
   }
 
   // =========================================================================
@@ -1304,7 +1434,7 @@
 
   function closeSettingsModal() {
     if (dom.settingsModalBackdrop) dom.settingsModalBackdrop.style.display = "none";
-    appState.clearKeyFlags = { gemini: false, openai: false, anthropic: false };
+    appState.clearKeyFlags = { gemini: false, openai: false, anthropic: false, pangram: false };
   }
 
   async function handleSaveSettings(e) {
@@ -1316,6 +1446,8 @@
       anthropic_model: dom.settingAnthropicModel?.value || "",
       ollama_url: dom.settingOllamaUrl?.value || "",
       ollama_model: dom.settingOllamaModel?.value || "",
+      pangram_model: dom.settingPangramModel?.value || "pangram-4",
+      pangram_public_link: dom.settingPangramPublicLink?.checked ? "true" : "false",
     };
 
     // API Keys (only sent if typed or cleared)
@@ -1330,6 +1462,10 @@
     const anthropicKey = dom.settingAnthropicKey?.value || "";
     if (anthropicKey) payload.anthropic_api_key = anthropicKey;
     if (appState.clearKeyFlags.anthropic) payload.clear_anthropic_api_key = true;
+
+    const pangramKey = dom.settingPangramKey?.value || "";
+    if (pangramKey) payload.pangram_api_key = pangramKey;
+    if (appState.clearKeyFlags.pangram) payload.clear_pangram_api_key = true;
 
     try {
       const res = await apiRequest("/api/settings", "POST", payload);
@@ -1349,6 +1485,937 @@
       const data = await apiRequest(`/api/state?mode=${encodeURIComponent(appState.activeContextMode)}`);
       applyState(data);
     } catch (_) {}
+  }
+
+  // =========================================================================
+  // Pangram Labs & Originality Inspector Handlers
+  // =========================================================================
+  async function handleTestPangramKey() {
+    const typedKey = dom.settingPangramKey?.value?.trim() || "";
+    let url = "/api/pangram/models";
+    if (typedKey) {
+      url += `?api_key=${encodeURIComponent(typedKey)}`;
+    }
+    const origText = dom.btnTestPangram?.textContent;
+    if (dom.btnTestPangram) {
+      dom.btnTestPangram.textContent = "Testing...";
+      dom.btnTestPangram.disabled = true;
+    }
+    try {
+      const res = await apiRequest(url);
+      if (res && res.ok) {
+        const modelsList = (res.models || []).join(", ") || "pangram-4";
+        showToast("Pangram API Connected", `Valid key. Available models: ${modelsList}`, "success");
+      } else {
+        showToast("Pangram Key Error", res.error || "Unable to verify API key with Pangram", "error");
+      }
+    } catch (err) {
+      showToast("Pangram Test Failed", err.message, "error");
+    } finally {
+      if (dom.btnTestPangram) {
+        dom.btnTestPangram.textContent = origText || "Test Key";
+        dom.btnTestPangram.disabled = false;
+      }
+    }
+  }
+
+  function updateInspectorCounts() {
+    const text = dom.inspectorInput?.value || "";
+    const words = countWords(text);
+    const chars = text.length;
+    const strippedChars = text.trim().length;
+
+    if (dom.inspectorWordCount) {
+      dom.inspectorWordCount.textContent = `${words} word${words === 1 ? "" : "s"}`;
+    }
+    if (dom.inspectorCharCount) {
+      dom.inspectorCharCount.textContent = `${chars} char${chars === 1 ? "" : "s"}`;
+    }
+
+    if (dom.inspectorReadinessPill) {
+      if (strippedChars >= 50) {
+        dom.inspectorReadinessPill.textContent = `Ready (${strippedChars} chars)`;
+        dom.inspectorReadinessPill.className = "inspector-pill-readiness pill-ready";
+      } else {
+        dom.inspectorReadinessPill.textContent = `Requires ≥50 chars (${strippedChars}/50)`;
+        dom.inspectorReadinessPill.className = "inspector-pill-readiness pill-warning";
+      }
+    }
+
+    if (dom.inspectorCostEst) {
+      const cost = (words / 100.0) * 0.05;
+      dom.inspectorCostEst.textContent = `Est. ~$${cost.toFixed(3)} USD`;
+    }
+  }
+
+  function handleGrabInspectorClipboard() {
+    if (!navigator.clipboard?.readText) {
+      showToast("Clipboard Unavailable", "Clipboard API permission not granted", "error");
+      return;
+    }
+    navigator.clipboard
+      .readText()
+      .then((clip) => {
+        if (!clip) {
+          showToast("Clipboard Empty", "macOS clipboard had no text content", "info");
+          return;
+        }
+        if (dom.inspectorInput) dom.inspectorInput.value = clip;
+        updateInspectorCounts();
+        showToast("Clipboard Pasted", `Pasted ${countWords(clip)} words into Inspector`, "success");
+      })
+      .catch((err) => {
+        showToast("Clipboard Error", err.message, "error");
+      });
+  }
+
+  function handleLoadInspectorSample() {
+    if (dom.inspectorInput) dom.inspectorInput.value = SAMPLE_INSPECTOR_SUBMISSION;
+    if (dom.inspectorDocTitle) dom.inspectorDocTitle.value = "AI & Humanizer Evaluation Sample";
+    updateInspectorCounts();
+    showToast("Sample Loaded", "Sample submission loaded into inspector.", "info");
+  }
+
+  async function handleInspectorUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    showToast("Uploading File", `Reading ${file.name}...`, "info");
+    const reader = new FileReader();
+
+    reader.onload = async () => {
+      try {
+        const rawResult = reader.result;
+        let b64 = "";
+        if (typeof rawResult === "string") {
+          const parts = rawResult.split(",");
+          b64 = parts.length > 1 ? parts[1] : parts[0];
+        }
+        const preferP4 = (dom.inspectorModelSelect?.value || "pangram-4") === "pangram-4";
+        const pubLink = dom.inspectorShareableLink?.checked || false;
+
+        const res = await apiRequest("/api/pangram/file", "POST", {
+          filename: file.name,
+          content_base64: b64,
+          prefer_pangram_4: preferP4,
+          public_dashboard_link: pubLink,
+        });
+
+        if (res && res.result) {
+          if (dom.inspectorInput) dom.inspectorInput.value = res.result.text || "";
+          if (dom.inspectorDocTitle) dom.inspectorDocTitle.value = file.name;
+          updateInspectorCounts();
+          renderPangramResult(res.result);
+          if (res.state) applyState(res.state);
+          showToast("File Scanned", `Pangram Labs completed analysis for ${file.name}`, "success");
+        }
+      } catch (err) {
+        showToast("File Scan Failed", err.message, "error");
+      } finally {
+        if (dom.fileInspectorUpload) dom.fileInspectorUpload.value = "";
+      }
+    };
+
+    reader.onerror = () => {
+      showToast("File Read Error", "Failed to read chosen file", "error");
+      if (dom.fileInspectorUpload) dom.fileInspectorUpload.value = "";
+    };
+
+    reader.readAsDataURL(file);
+  }
+
+  async function handleRunFreePrescan() {
+    const text = dom.inspectorInput?.value || "";
+    if (!text.trim()) {
+      showToast("Empty Input", "Please enter or paste text to run the free local pre-scan.", "error");
+      return;
+    }
+
+    try {
+      const res = await apiRequest("/api/analyze", "POST", {
+        text,
+        context_mode: appState.activeContextMode,
+      });
+
+      if (dom.inspectorPrescanBox) dom.inspectorPrescanBox.style.display = "block";
+      if (dom.prescanSummaryText) {
+        dom.prescanSummaryText.textContent = `Analyzed ${res.word_count || countWords(text)} words locally ($0 cost)`;
+      }
+      if (dom.prescanHumanScore) {
+        dom.prescanHumanScore.textContent = `${res.human_score ?? 0}%`;
+      }
+      if (dom.prescanAiRisk) {
+        dom.prescanAiRisk.textContent = `${res.ai_risk_score ?? 0}%`;
+      }
+      if (dom.prescanBurstiness) {
+        dom.prescanBurstiness.textContent = `${res.burstiness_score ?? 0}`;
+      }
+      if (dom.prescanFlagsCount) {
+        dom.prescanFlagsCount.textContent = (res.flags || []).length;
+      }
+      if (dom.prescanFlagsList) {
+        const flags = res.flags || [];
+        if (flags.length === 0) {
+          dom.prescanFlagsList.innerHTML = '<span class="text-xs text-emerald font-mono">No clichés or AI markers detected in local heuristic pass.</span>';
+        } else {
+          dom.prescanFlagsList.innerHTML = flags
+            .map((f) => `<span class="prescan-flag-pill font-mono">${escapeHtml(f.phrase || f.type || "cliché")}</span>`)
+            .join("");
+        }
+      }
+      showToast("Pre-Scan Complete", "Local heuristic and Voice DNA analysis completed ($0 cost)", "info");
+    } catch (err) {
+      showToast("Pre-Scan Failed", err.message, "error");
+    }
+  }
+
+  async function handleRunPangramScan() {
+    const text = dom.inspectorInput?.value || "";
+    if (text.trim().length < 50) {
+      showToast("Too Short for Pangram", "Pangram Labs requires at least 50 characters of text to run an enterprise scan.", "error");
+      return;
+    }
+
+    const origText = dom.btnRunPangramScan?.textContent;
+    if (dom.btnRunPangramScan) {
+      dom.btnRunPangramScan.textContent = "Scanning with Pangram 4...";
+      dom.btnRunPangramScan.disabled = true;
+    }
+
+    try {
+      const model = dom.inspectorModelSelect?.value || "pangram-4";
+      const pubLink = dom.inspectorShareableLink?.checked || false;
+      const title = dom.inspectorDocTitle?.value?.trim() || "";
+
+      const res = await apiRequest("/api/pangram/scan", "POST", {
+        text,
+        model,
+        public_dashboard_link: pubLink,
+        title,
+      });
+
+      if (res && res.result) {
+        renderPangramResult(res.result);
+        if (res.state) applyState(res.state);
+        showToast("Pangram 4 Scan Complete", `Verdict: ${res.result.headline || res.result.prediction_short || "Finished"}`, "success");
+      }
+    } catch (err) {
+      showToast("Pangram Scan Failed", err.message, "error");
+    } finally {
+      if (dom.btnRunPangramScan) {
+        dom.btnRunPangramScan.textContent = origText || "Scan with Pangram 4";
+        dom.btnRunPangramScan.disabled = false;
+      }
+    }
+  }
+
+  async function handleRunPlagiarismScan() {
+    const text = dom.inspectorInput?.value || "";
+    if (text.trim().length < 50) {
+      showToast("Too Short for Plagiarism Check", "Plagiarism scanning requires at least 50 characters of text.", "error");
+      return;
+    }
+
+    const origText = dom.btnRunPlagiarismScan?.textContent;
+    if (dom.btnRunPlagiarismScan) {
+      dom.btnRunPlagiarismScan.textContent = "Scanning Plagiarism...";
+      dom.btnRunPlagiarismScan.disabled = true;
+    }
+
+    try {
+      const title = dom.inspectorDocTitle?.value?.trim() || "";
+      const res = await apiRequest("/api/pangram/plagiarism", "POST", {
+        text,
+        title,
+      });
+
+      if (res && res.result) {
+        renderPangramResult(res.result);
+        if (res.state) applyState(res.state);
+        const score = Math.round((res.result.plagiarism_score || 0) * 100);
+        showToast("Plagiarism Scan Complete", `Web overlap score: ${score}%`, "success");
+      }
+    } catch (err) {
+      showToast("Plagiarism Scan Failed", err.message, "error");
+    } finally {
+      if (dom.btnRunPlagiarismScan) {
+        dom.btnRunPlagiarismScan.textContent = origText || "Web Plagiarism Check";
+        dom.btnRunPlagiarismScan.disabled = false;
+      }
+    }
+  }
+
+  function renderHighlightedSubmission(text, windows) {
+    if (!text) return "";
+    if (!windows || windows.length === 0) return escapeHtml(text);
+
+    // Normalize and filter valid windows safely
+    const validWindows = windows
+      .filter((w) => typeof w.start_index === "number" && typeof w.end_index === "number" && w.start_index < w.end_index)
+      .map((w) => ({
+        start: Math.max(0, Math.min(text.length, w.start_index)),
+        end: Math.max(0, Math.min(text.length, w.end_index)),
+        label: String(w.label || "HUMAN").toUpperCase(),
+        isHumanized: Boolean(w.is_humanized || (w.humanizer_score && w.humanizer_score >= 0.5)),
+        confidence: w.confidence || 0,
+        humanizerScore: w.humanizer_score || 0,
+      }))
+      .sort((a, b) => a.start - b.start);
+
+    let html = "";
+    let cursor = 0;
+
+    for (const w of validWindows) {
+      if (w.start > cursor) {
+        html += escapeHtml(text.substring(cursor, w.start));
+      }
+      if (w.end > w.start && w.start >= cursor) {
+        const segmentText = text.substring(w.start, w.end);
+        let cls = "span-human";
+        if (w.label === "AI") {
+          cls = "span-ai";
+        } else if (w.label === "AI_ASSISTED" || w.label === "ASSISTED") {
+          cls = "span-assisted";
+        }
+        const humanizerClass = w.isHumanized ? " span-humanizer" : "";
+        const badge = w.isHumanized ? '<span class="tag-humanizer-scrubbed">Scrubbed</span>' : "";
+        const titleAttr = `${escapeHtml(w.label)} (${Math.round(w.confidence * 100)}%)${w.isHumanized ? " • Humanizer scrubbed" : ""}`;
+        html += `<span class="${cls}${humanizerClass}" title="${titleAttr}">${escapeHtml(segmentText)}${badge}</span>`;
+        cursor = w.end;
+      }
+    }
+
+    if (cursor < text.length) {
+      html += escapeHtml(text.substring(cursor));
+    }
+    return html;
+  }
+
+  function renderWindowBreakdown(windows) {
+    if (!dom.inspectorWindowsList) return;
+    if (!windows || windows.length === 0) {
+      if (dom.inspectorWindowsCount) dom.inspectorWindowsCount.textContent = "0 windows analyzed";
+      dom.inspectorWindowsList.innerHTML = '<div class="text-xs text-muted" style="padding: 12px;">No sliding window segments recorded for this scan.</div>';
+      return;
+    }
+
+    if (dom.inspectorWindowsCount) {
+      dom.inspectorWindowsCount.textContent = `${windows.length} window segments analyzed`;
+    }
+
+    dom.inspectorWindowsList.innerHTML = windows
+      .map((w, idx) => {
+        const label = String(w.label || "HUMAN").toUpperCase();
+        let labelClass = "text-emerald";
+        let badgeBg = "rgba(34, 197, 94, 0.15)";
+        if (label === "AI") {
+          labelClass = "text-rose";
+          badgeBg = "rgba(239, 68, 68, 0.15)";
+        } else if (label === "AI_ASSISTED" || label === "ASSISTED") {
+          labelClass = "text-amber";
+          badgeBg = "rgba(245, 158, 11, 0.15)";
+        }
+
+        const isHum = Boolean(w.is_humanized || (w.humanizer_score && w.humanizer_score >= 0.5));
+        const confPct = Math.round((w.confidence || 0) * 100);
+        const humScore = typeof w.humanizer_score === "number" ? (w.humanizer_score * 100).toFixed(0) : "0";
+
+        return `
+          <div class="window-card">
+            <div class="window-card-head">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="font-mono text-xs text-muted">#${idx + 1}</span>
+                <span style="font-weight: 600; font-size: 11px; padding: 2px 8px; border-radius: var(--radius-pill); background: ${badgeBg};" class="${labelClass}">
+                  ${escapeHtml(label)} (${confPct}%)
+                </span>
+                ${isHum ? '<span class="tag-humanizer-scrubbed">Scrubbed (' + humScore + '%)</span>' : ''}
+              </div>
+              <div class="text-xs text-muted font-mono">
+                ${w.word_count || 0} words • ${w.token_length || 0} tokens
+              </div>
+            </div>
+            <div class="window-card-body font-mono">
+              "${escapeHtml(w.text || "")}"
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  function renderPlagiarismMatches(result) {
+    if (!dom.inspectorPlagiarismMatches) return;
+    const matches = result.matches || [];
+    const score = result.plagiarism_score ?? 0;
+    const scorePct = Math.round(score * 100);
+
+    if (dom.inspectorPlagiarismScoreBadge) {
+      dom.inspectorPlagiarismScoreBadge.textContent = `${scorePct}% Overlap`;
+      dom.inspectorPlagiarismScoreBadge.className = scorePct > 15 ? "badge-neutral font-mono text-rose" : "badge-neutral font-mono text-emerald";
+    }
+
+    if (dom.inspectorPlagiarismStatus) {
+      dom.inspectorPlagiarismStatus.textContent = result.plagiarism_detected ? "Plagiarism Detected" : "No Critical Plagiarism Detected";
+    }
+
+    if (matches.length === 0) {
+      dom.inspectorPlagiarismMatches.innerHTML = '<div class="text-xs text-muted" style="padding: 12px;">No matching web sources found. High textual originality.</div>';
+      return;
+    }
+
+    dom.inspectorPlagiarismMatches.innerHTML = matches
+      .map((m, idx) => {
+        const url = m.url || m.source || "";
+        const title = m.title || m.name || url || `Match #${idx + 1}`;
+        const pct = m.percentage != null ? `${Math.round(m.percentage)}% match` : "";
+        const snippet = m.snippet || m.matched_text || "";
+
+        return `
+          <div class="plagiarism-match-card">
+            <div class="plagiarism-match-head">
+              <strong style="color: #ffffff;">${escapeHtml(title)}</strong>
+              ${pct ? `<span class="font-mono text-rose text-xs">${escapeHtml(pct)}</span>` : ""}
+            </div>
+            ${url ? `<div class="text-xs text-muted mb-2"><a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a></div>` : ""}
+            ${snippet ? `<div class="text-xs text-muted font-mono" style="background: rgba(255,255,255,0.03); padding: 8px; border-radius: 4px;">"${escapeHtml(snippet)}"</div>` : ""}
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  function renderPangramResult(result) {
+    if (!result) return;
+    appState.lastPangramResult = result;
+
+    if (dom.inspectorEmptyState) dom.inspectorEmptyState.style.display = "none";
+    if (dom.inspectorActiveResults) dom.inspectorActiveResults.style.display = "block";
+
+    // Headline and prediction
+    const headline = result.headline || result.prediction_short || "Completed";
+    if (dom.inspectorHeadlineTitle) dom.inspectorHeadlineTitle.textContent = headline;
+    if (dom.inspectorHeadlinePrediction) dom.inspectorHeadlinePrediction.textContent = result.prediction || "";
+
+    const ai = result.fraction_ai || 0;
+    const assisted = result.fraction_ai_assisted || 0;
+    const human = result.fraction_human || 0;
+
+    if (dom.inspectorHeadlineBadge) {
+      if (result.scan_type === "plagiarism") {
+        const pScore = Math.round((result.plagiarism_score || 0) * 100);
+        dom.inspectorHeadlineBadge.textContent = `Plagiarism ${pScore}%`;
+        dom.inspectorHeadlineBadge.className = pScore > 15 ? "inspector-verdict-badge verdict-ai" : "inspector-verdict-badge verdict-human";
+      } else if (ai >= 0.65) {
+        dom.inspectorHeadlineBadge.textContent = `Likely AI (${Math.round(ai * 100)}%)`;
+        dom.inspectorHeadlineBadge.className = "inspector-verdict-badge verdict-ai";
+      } else if (assisted >= 0.35 || ai >= 0.35) {
+        dom.inspectorHeadlineBadge.textContent = `AI-Assisted (${Math.round(assisted * 100)}%)`;
+        dom.inspectorHeadlineBadge.className = "inspector-verdict-badge verdict-assisted";
+      } else {
+        dom.inspectorHeadlineBadge.textContent = `Likely Human (${Math.round(human * 100)}%)`;
+        dom.inspectorHeadlineBadge.className = "inspector-verdict-badge verdict-human";
+      }
+    }
+
+    if (dom.inspectorModelBadge) {
+      dom.inspectorModelBadge.textContent = result.model || "pangram-4";
+    }
+
+    if (dom.inspectorDashboardLink) {
+      if (result.dashboard_link) {
+        dom.inspectorDashboardLink.href = result.dashboard_link;
+        dom.inspectorDashboardLink.style.display = "inline-flex";
+      } else {
+        dom.inspectorDashboardLink.style.display = "none";
+      }
+    }
+
+    // 3-Segment Stacked Meter
+    const aiPct = Math.min(100, Math.max(0, ai * 100)).toFixed(1);
+    const assistedPct = Math.min(100, Math.max(0, assisted * 100)).toFixed(1);
+    const humanPct = Math.min(100, Math.max(0, human * 100)).toFixed(1);
+
+    if (dom.lblMeterAi) dom.lblMeterAi.textContent = `${aiPct}%`;
+    if (dom.lblMeterAssisted) dom.lblMeterAssisted.textContent = `${assistedPct}%`;
+    if (dom.lblMeterHuman) dom.lblMeterHuman.textContent = `${humanPct}%`;
+
+    if (dom.meterSegmentAi) dom.meterSegmentAi.style.width = `${aiPct}%`;
+    if (dom.meterSegmentAssisted) dom.meterSegmentAssisted.style.width = `${assistedPct}%`;
+    if (dom.meterSegmentHuman) dom.meterSegmentHuman.style.width = `${humanPct}%`;
+
+    // 4 Stat Cards
+    if (dom.cardValAi) dom.cardValAi.textContent = `${aiPct}%`;
+    if (dom.cardSubAi) dom.cardSubAi.textContent = `${result.num_ai_segments || 0} segments`;
+
+    if (dom.cardValAssisted) dom.cardValAssisted.textContent = `${assistedPct}%`;
+    if (dom.cardSubAssisted) dom.cardSubAssisted.textContent = `${result.num_ai_assisted_segments || 0} segments`;
+
+    if (dom.cardValHuman) dom.cardValHuman.textContent = `${humanPct}%`;
+    if (dom.cardSubHuman) dom.cardSubHuman.textContent = `${result.num_human_segments || 0} segments`;
+
+    const hasHumanizer = Boolean(result.has_humanized_segments || (result.max_humanizer_score && result.max_humanizer_score >= 0.5));
+    if (dom.cardValHumanizer) {
+      if (hasHumanizer) {
+        const score = typeof result.max_humanizer_score === "number" ? Math.round(result.max_humanizer_score * 100) : 100;
+        dom.cardValHumanizer.textContent = `Detected (${score}%)`;
+        dom.cardValHumanizer.className = "stat-card-value font-mono text-rose";
+        if (dom.cardSubHumanizer) dom.cardSubHumanizer.textContent = "Scrubber / bypass signature flagged";
+      } else {
+        dom.cardValHumanizer.textContent = "Clean";
+        dom.cardValHumanizer.className = "stat-card-value font-mono text-emerald";
+        if (dom.cardSubHumanizer) dom.cardSubHumanizer.textContent = `Max score: ${(result.max_humanizer_score || 0).toFixed(2)}`;
+      }
+    }
+
+    // Highlighted Submission Viewer
+    const textToHighlight = result.text || dom.inspectorInput?.value || "";
+    if (dom.inspectorHighlightedText) {
+      dom.inspectorHighlightedText.innerHTML = renderHighlightedSubmission(textToHighlight, result.windows);
+    }
+
+    // Windows list
+    renderWindowBreakdown(result.windows);
+
+    // Web Plagiarism Section
+    if (result.scan_type === "plagiarism" || (result.matches && result.matches.length > 0)) {
+      if (dom.inspectorPlagiarismSection) dom.inspectorPlagiarismSection.style.display = "block";
+      renderPlagiarismMatches(result);
+    } else {
+      if (dom.inspectorPlagiarismSection) dom.inspectorPlagiarismSection.style.display = "none";
+    }
+  }
+
+  function renderPangramHistory() {
+    if (!dom.inspectorHistoryTbody) return;
+    const scans = appState.pangramScans || [];
+
+    if (dom.inspectorHistoryCount) {
+      dom.inspectorHistoryCount.textContent = `${scans.length} scan${scans.length === 1 ? "" : "s"} saved`;
+    }
+
+    if (scans.length === 0) {
+      dom.inspectorHistoryTbody.innerHTML = `
+        <tr>
+          <td colspan="6" class="text-center text-muted" style="padding: 24px;">No saved Pangram scans yet. Run a scan to build history.</td>
+        </tr>
+      `;
+      return;
+    }
+
+    dom.inspectorHistoryTbody.innerHTML = scans
+      .map((scan) => {
+        let dateStr = "";
+        try {
+          dateStr = new Date(scan.created_at).toLocaleString([], {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+        } catch (_) {
+          dateStr = scan.created_at || "";
+        }
+
+        const typeLabel = scan.scan_type === "plagiarism" ? "Plagiarism" : (scan.scan_type === "file" ? "File Scan" : "Pangram 4");
+
+        let summaryText = "";
+        if (scan.scan_type === "plagiarism") {
+          const resObj = typeof scan.result === "string" ? JSON.parse(scan.result) : (scan.result || {});
+          const pScore = Math.round((resObj.plagiarism_score || 0) * 100);
+          summaryText = `<span class="${pScore > 15 ? 'text-rose' : 'text-emerald'}">${pScore}% web overlap</span>`;
+        } else {
+          const aiPct = Math.round((scan.fraction_ai || 0) * 100);
+          const humPct = Math.round((scan.fraction_human || 0) * 100);
+          const scrubbed = (scan.max_humanizer_score || 0) >= 0.5 ? '<span class="tag-humanizer-scrubbed" style="font-size: 8px;">Scrubbed</span>' : '';
+          summaryText = `<span class="text-rose">AI: ${aiPct}%</span> • <span class="text-emerald">Human: ${humPct}%</span> ${scrubbed}`;
+        }
+
+        const costStr = scan.estimated_cost_usd ? `$${scan.estimated_cost_usd.toFixed(3)}` : "$0.00";
+
+        return `
+          <tr>
+            <td class="font-mono text-xs text-muted">${escapeHtml(dateStr)}</td>
+            <td>
+              <strong style="color: #ffffff; display: block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                ${escapeHtml(scan.title || "Untitled Scan")}
+              </strong>
+              <span class="text-xs text-muted font-mono">${scan.word_count || 0} words</span>
+            </td>
+            <td>
+              <span class="badge-neutral text-xs font-mono">${escapeHtml(typeLabel)}</span>
+            </td>
+            <td class="text-xs font-mono">
+              ${summaryText}
+            </td>
+            <td class="font-mono text-xs text-muted">${escapeHtml(costStr)}</td>
+            <td style="text-align: right;">
+              <button type="button" class="btn btn-secondary btn-sm btn-load-scan" data-id="${scan.id}" title="Load results into inspector view ($0 cost)">
+                Load Result
+              </button>
+              <button type="button" class="btn btn-ghost btn-sm text-rose btn-del-scan" data-id="${scan.id}" title="Delete scan record">
+                ×
+              </button>
+            </td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  function handleLoadSavedScan(scanId) {
+    const numericId = parseInt(scanId, 10);
+    const item = (appState.pangramScans || []).find((s) => s.id === numericId);
+    if (!item) return;
+
+    if (dom.inspectorInput) {
+      dom.inspectorInput.value = item.input_text || item.result?.text || "";
+    }
+    if (dom.inspectorDocTitle) {
+      dom.inspectorDocTitle.value = item.title || "";
+    }
+    updateInspectorCounts();
+
+    const resultObj = typeof item.result === "string" ? JSON.parse(item.result) : (item.result || {});
+    renderPangramResult(resultObj);
+    showToast("Loaded Result", `Restored scan from ${item.title || "saved history"} ($0 cost)`, "info");
+  }
+
+  async function handleDeleteSavedScan(scanId) {
+    if (!confirm("Delete this saved Pangram scan from your local history?")) return;
+    try {
+      const res = await apiRequest(`/api/pangram/scans/${scanId}`, "DELETE");
+      applyState(res.state);
+      showToast("Scan Deleted", "Removed scan record from history", "success");
+    } catch (err) {
+      showToast("Delete Failed", err.message, "error");
+    }
+  }
+
+  // =========================================================================
+  // Source & Revision Coach Handlers (Academic Integrity)
+  // =========================================================================
+  function updateAcademicCounts() {
+    if (dom.acadDraftWordCount) {
+      dom.acadDraftWordCount.textContent = `${countWords(dom.acadDraftInput?.value || "")} words`;
+    }
+    if (dom.acadSourceWordCount) {
+      dom.acadSourceWordCount.textContent = `${countWords(dom.acadSourceInput?.value || "")} words`;
+    }
+  }
+
+  function handleLoadAcademicSample() {
+    if (dom.acadDraftInput) dom.acadDraftInput.value = SAMPLE_ACADEMIC_DRAFT;
+    if (dom.acadSourceInput) dom.acadSourceInput.value = SAMPLE_ACADEMIC_SOURCE;
+    updateAcademicCounts();
+    showToast("Sample Coursework Loaded", "Sample student draft and reference source loaded.", "info");
+  }
+
+  function handleGrabAcademicClipboard() {
+    if (!navigator.clipboard?.readText) {
+      showToast("Clipboard Unavailable", "Clipboard API permission not granted", "error");
+      return;
+    }
+    navigator.clipboard
+      .readText()
+      .then((clip) => {
+        if (!clip) {
+          showToast("Clipboard Empty", "macOS clipboard had no text content", "info");
+          return;
+        }
+        if (dom.acadDraftInput) dom.acadDraftInput.value = clip;
+        updateAcademicCounts();
+        showToast("Clipboard Pasted", `Pasted ${countWords(clip)} words into Student Draft`, "success");
+      })
+      .catch((err) => {
+        showToast("Clipboard Error", err.message, "error");
+      });
+  }
+
+  function handleClearAcademic() {
+    if (dom.acadDraftInput) dom.acadDraftInput.value = "";
+    if (dom.acadSourceInput) dom.acadSourceInput.value = "";
+    updateAcademicCounts();
+    if (dom.acadCitationEmpty) dom.acadCitationEmpty.style.display = "block";
+    if (dom.acadCitationBody) dom.acadCitationBody.style.display = "none";
+    if (dom.acadCoachEmpty) dom.acadCoachEmpty.style.display = "block";
+    if (dom.acadCoachBody) dom.acadCoachBody.style.display = "none";
+  }
+
+  async function handleRunCitationCheck() {
+    const draftText = dom.acadDraftInput?.value?.trim() || "";
+    const sourceText = dom.acadSourceInput?.value?.trim() || "";
+    if (!draftText || !sourceText) {
+      showToast("Missing Inputs", "Please enter both Student Draft and Source Text to check overlap & citations.", "error");
+      return;
+    }
+
+    const origText = dom.btnRunCitationCheck?.textContent;
+    if (dom.btnRunCitationCheck) {
+      dom.btnRunCitationCheck.textContent = "Checking Overlap...";
+      dom.btnRunCitationCheck.disabled = true;
+    }
+
+    try {
+      const res = await apiRequest("/api/academic/citation-check", "POST", {
+        draft_text: draftText,
+        source_text: sourceText,
+      });
+      renderCitationReport(res);
+      showToast("Source Overlap Checked", `Attribution status: ${res.status_label || "Completed"}`, "success");
+    } catch (err) {
+      showToast("Citation Check Failed", err.message, "error");
+    } finally {
+      if (dom.btnRunCitationCheck) {
+        dom.btnRunCitationCheck.textContent = origText || "Check Source Overlap & Citations";
+        dom.btnRunCitationCheck.disabled = false;
+      }
+    }
+  }
+
+  async function handleRunCoach() {
+    const draftText = dom.acadDraftInput?.value?.trim() || "";
+    if (!draftText) {
+      showToast("Missing Draft", "Please enter your student draft to run revision coaching diagnostics.", "error");
+      return;
+    }
+
+    const origText = dom.btnRunCoach?.textContent;
+    if (dom.btnRunCoach) {
+      dom.btnRunCoach.textContent = "Analyzing Clarity...";
+      dom.btnRunCoach.disabled = true;
+    }
+
+    try {
+      const res = await apiRequest("/api/academic/coach", "POST", {
+        draft_text: draftText,
+      });
+      renderAcademicCoachReport(res);
+      showToast("Academic Coaching Diagnostics Ready", `Clarity score: ${res.clarity_score}/100`, "success");
+    } catch (err) {
+      showToast("Coaching Failed", err.message, "error");
+    } finally {
+      if (dom.btnRunCoach) {
+        dom.btnRunCoach.textContent = origText || "Run Academic Revision Coach";
+        dom.btnRunCoach.disabled = false;
+      }
+    }
+  }
+
+  async function handleRunBothAcademic() {
+    const draftText = dom.acadDraftInput?.value?.trim() || "";
+    const sourceText = dom.acadSourceInput?.value?.trim() || "";
+    if (!draftText) {
+      showToast("Missing Draft", "Please enter your student draft.", "error");
+      return;
+    }
+
+    const origText = dom.btnRunBothAcad?.textContent;
+    if (dom.btnRunBothAcad) {
+      dom.btnRunBothAcad.textContent = "Running Both Checks...";
+      dom.btnRunBothAcad.disabled = true;
+    }
+
+    try {
+      const coachPromise = apiRequest("/api/academic/coach", "POST", { draft_text: draftText });
+      const citationPromise = sourceText
+        ? apiRequest("/api/academic/citation-check", "POST", { draft_text: draftText, source_text: sourceText })
+        : Promise.resolve(null);
+
+      const [coachRes, citationRes] = await Promise.all([coachPromise, citationPromise]);
+
+      if (coachRes) renderAcademicCoachReport(coachRes);
+      if (citationRes) renderCitationReport(citationRes);
+
+      showToast("Academic Checks Completed", "Both revision diagnostics and citation checks updated.", "success");
+    } catch (err) {
+      showToast("Checks Failed", err.message, "error");
+    } finally {
+      if (dom.btnRunBothAcad) {
+        dom.btnRunBothAcad.textContent = origText || "Run Both Checks";
+        dom.btnRunBothAcad.disabled = false;
+      }
+    }
+  }
+
+  function renderCitationReport(data) {
+    if (!data) return;
+    if (dom.acadCitationEmpty) dom.acadCitationEmpty.style.display = "none";
+    if (dom.acadCitationBody) dom.acadCitationBody.style.display = "block";
+
+    const overlap = data.overall_overlap_pct ?? 0;
+    if (dom.acadOverlapBadge) {
+      dom.acadOverlapBadge.textContent = `${overlap.toFixed(1)}%`;
+      if (overlap < 8.0) {
+        dom.acadOverlapBadge.className = "font-mono text-emerald";
+      } else if (overlap <= 25.0) {
+        dom.acadOverlapBadge.className = "font-mono text-amber";
+      } else {
+        dom.acadOverlapBadge.className = "font-mono text-rose";
+      }
+    }
+
+    if (dom.acadStatusBadge) {
+      dom.acadStatusBadge.textContent = data.status_label || "Completed";
+    }
+    if (dom.acadStatusLabel) {
+      dom.acadStatusLabel.textContent = data.status_label || "Clean Attribution";
+      if (overlap < 8.0) {
+        dom.acadStatusLabel.className = "text-emerald";
+      } else if (overlap <= 25.0) {
+        dom.acadStatusLabel.className = "text-amber";
+      } else {
+        dom.acadStatusLabel.className = "text-rose";
+      }
+    }
+    if (dom.acadQuotedCount) {
+      dom.acadQuotedCount.textContent = data.quoted_cited_count ?? 0;
+    }
+    if (dom.acadMatchesCount) {
+      dom.acadMatchesCount.textContent = (data.matches || []).length;
+    }
+
+    // Annotated Draft Segments
+    if (dom.acadAnnotatedDraft) {
+      const segs = data.annotated_segments || [];
+      dom.acadAnnotatedDraft.innerHTML = segs
+        .map((seg) => {
+          if (seg.type === "quoted_cited") {
+            return `<span class="annotated-quoted" title="Properly Quoted & Cited">${escapeHtml(seg.text)}</span>`;
+          }
+          if (seg.type === "verbatim") {
+            return `<span class="annotated-verbatim" title="Verbatim Unquoted Overlap">${escapeHtml(seg.text)}</span>`;
+          }
+          if (seg.type === "paraphrase") {
+            return `<span class="annotated-paraphrase" title="Close Paraphrase">${escapeHtml(seg.text)}</span>`;
+          }
+          return `<span>${escapeHtml(seg.text)}</span>`;
+        })
+        .join("");
+    }
+
+    // Matches List
+    if (dom.acadMatchesList) {
+      const matches = data.matches || [];
+      if (matches.length === 0) {
+        dom.acadMatchesList.innerHTML = `
+          <div class="text-xs text-muted" style="padding: 12px; background: var(--bg-subtle); border-radius: 6px;">
+            No verbatim or close paraphrase overlap detected outside of properly quoted citations.
+          </div>
+        `;
+      } else {
+        dom.acadMatchesList.innerHTML = matches
+          .map((m, idx) => {
+            const isVerbatim = m.type === "verbatim_unquoted";
+            const typeTitle = isVerbatim ? "Verbatim Unquoted Phrasing" : "Close Paraphrase";
+            const sevClass = m.severity === "high" ? "text-rose" : "text-amber";
+            const citedStatus = m.has_citation_nearby ? "Cited nearby" : "No citation found";
+            const citedClass = m.has_citation_nearby ? "text-emerald" : "text-rose";
+
+            return `
+              <div class="acad-match-item">
+                <div class="acad-match-head">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="font-mono text-xs text-muted">#${idx + 1}</span>
+                    <strong class="${sevClass}" style="font-size: 12px;">${escapeHtml(typeTitle)}</strong>
+                    <span class="font-mono text-xs text-muted">(${m.word_length || 0} words)</span>
+                  </div>
+                  <span class="font-mono text-xs ${citedClass}">${escapeHtml(citedStatus)}</span>
+                </div>
+                <div class="acad-match-excerpts font-mono">
+                  <div class="excerpt-draft">
+                    <span class="text-xs text-muted" style="display: block; margin-bottom: 2px;">Draft Excerpt:</span>
+                    "${escapeHtml(m.draft_excerpt || "")}"
+                  </div>
+                  <div class="excerpt-source">
+                    <span class="text-xs text-muted" style="display: block; margin-bottom: 2px;">Source Reference:</span>
+                    "${escapeHtml(m.source_excerpt || "")}"
+                  </div>
+                </div>
+                <div class="acad-guidance-box">
+                  <strong>Revision Guidance:</strong> ${escapeHtml(m.guidance || "")}
+                </div>
+              </div>
+            `;
+          })
+          .join("");
+      }
+    }
+  }
+
+  function renderAcademicCoachReport(data) {
+    if (!data) return;
+    if (dom.acadCoachEmpty) dom.acadCoachEmpty.style.display = "none";
+    if (dom.acadCoachBody) dom.acadCoachBody.style.display = "block";
+
+    const score = data.clarity_score ?? 0;
+    if (dom.acadClarityScore) {
+      dom.acadClarityScore.textContent = `${score}/100`;
+      if (score >= 80) {
+        dom.acadClarityScore.className = "font-mono text-emerald";
+      } else if (score >= 60) {
+        dom.acadClarityScore.className = "font-mono text-amber";
+      } else {
+        dom.acadClarityScore.className = "font-mono text-rose";
+      }
+    }
+
+    const counts = data.counts || {};
+    if (dom.acadCountPassive) dom.acadCountPassive.textContent = counts.passive_voice || 0;
+    if (dom.acadCountUnattributed) dom.acadCountUnattributed.textContent = counts.unattributed_claim || 0;
+    if (dom.acadCountFiller) dom.acadCountFiller.textContent = counts.vague_filler || 0;
+    if (dom.acadCountOpener) dom.acadCountOpener.textContent = counts.repetitive_opener || 0;
+    if (dom.acadCountLong) dom.acadCountLong.textContent = counts.long_sentence || 0;
+
+    // Priority actions
+    if (dom.acadPriorityActions) {
+      const actions = data.priority_actions || [];
+      dom.acadPriorityActions.innerHTML = actions.map((act) => `<li>${escapeHtml(act)}</li>`).join("");
+    }
+
+    // Sentence diagnostics list
+    if (dom.acadCoachList) {
+      const feedback = data.sentence_feedback || [];
+      if (feedback.length === 0) {
+        dom.acadCoachList.innerHTML = `
+          <div class="text-xs text-emerald" style="padding: 12px; background: rgba(34,197,94,0.08); border-radius: 6px;">
+            ✓ Excellent scholarly prose! Zero clarity flags detected across analyzed sentences.
+          </div>
+        `;
+      } else {
+        dom.acadCoachList.innerHTML = feedback
+          .map((item) => {
+            const issuesHtml = (item.issues || [])
+              .map(
+                (iss) => `
+                <div class="acad-issue-tag">
+                  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;">
+                    <strong class="text-amber" style="font-size: 11px;">${escapeHtml(iss.category)}:</strong>
+                    <span class="font-mono text-muted text-xs">"${escapeHtml(iss.phrase)}"</span>
+                  </div>
+                  <div class="text-xs text-muted">${escapeHtml(iss.tip)}</div>
+                </div>
+              `
+              )
+              .join("");
+
+            return `
+              <div class="acad-sentence-item">
+                <div class="acad-sentence-head">
+                  <span>Sentence #${(item.sentence_index ?? 0) + 1}</span>
+                  <span class="font-mono">${item.word_count || 0} words</span>
+                </div>
+                <div class="acad-sentence-text font-mono">
+                  "${escapeHtml(item.sentence || "")}"
+                </div>
+                <div class="acad-issues-list">
+                  ${issuesHtml}
+                </div>
+              </div>
+            `;
+          })
+          .join("");
+      }
+    }
   }
 
   // =========================================================================
@@ -1481,6 +2548,56 @@
       if (dom.badgeAnthropic) dom.badgeAnthropic.textContent = "Will be cleared on save";
       if (dom.settingAnthropicKey) dom.settingAnthropicKey.value = "";
     });
+
+    // Pangram Labs Settings Clear & Test
+    dom.btnClearPangram?.addEventListener("click", () => {
+      appState.clearKeyFlags.pangram = true;
+      if (dom.badgePangram) {
+        dom.badgePangram.textContent = "Will be cleared on save";
+        dom.badgePangram.className = "provider-status-badge badge-unconfigured";
+      }
+      if (dom.settingPangramKey) dom.settingPangramKey.value = "";
+    });
+    dom.btnTestPangram?.addEventListener("click", handleTestPangramKey);
+
+    // Inspector Tab Listeners
+    dom.inspectorInput?.addEventListener("input", updateInspectorCounts);
+    dom.btnInspectorClipboard?.addEventListener("click", handleGrabInspectorClipboard);
+    dom.btnInspectorUpload?.addEventListener("click", () => dom.fileInspectorUpload?.click());
+    dom.fileInspectorUpload?.addEventListener("change", handleInspectorUpload);
+    dom.btnInspectorSample?.addEventListener("click", handleLoadInspectorSample);
+    dom.btnInspectorSettings?.addEventListener("click", openSettingsModal);
+    dom.btnRunFreePrescan?.addEventListener("click", handleRunFreePrescan);
+    dom.btnClosePrescan?.addEventListener("click", () => {
+      if (dom.inspectorPrescanBox) dom.inspectorPrescanBox.style.display = "none";
+    });
+    dom.btnRunPangramScan?.addEventListener("click", handleRunPangramScan);
+    dom.btnRunPlagiarismScan?.addEventListener("click", handleRunPlagiarismScan);
+
+    // Saved Pangram Scan History Delegated Actions
+    dom.inspectorHistoryTbody?.addEventListener("click", (e) => {
+      const loadBtn = e.target.closest(".btn-load-scan");
+      if (loadBtn) {
+        const scanId = loadBtn.getAttribute("data-id");
+        if (scanId) handleLoadSavedScan(scanId);
+        return;
+      }
+      const delBtn = e.target.closest(".btn-del-scan");
+      if (delBtn) {
+        const scanId = delBtn.getAttribute("data-id");
+        if (scanId) handleDeleteSavedScan(scanId);
+      }
+    });
+
+    // Academic Tab Listeners
+    dom.acadDraftInput?.addEventListener("input", updateAcademicCounts);
+    dom.acadSourceInput?.addEventListener("input", updateAcademicCounts);
+    dom.btnAcadSample?.addEventListener("click", handleLoadAcademicSample);
+    dom.btnAcadClipboard?.addEventListener("click", handleGrabAcademicClipboard);
+    dom.btnAcadClear?.addEventListener("click", handleClearAcademic);
+    dom.btnRunCoach?.addEventListener("click", handleRunCoach);
+    dom.btnRunCitationCheck?.addEventListener("click", handleRunCitationCheck);
+    dom.btnRunBothAcad?.addEventListener("click", handleRunBothAcademic);
   }
 
   // =========================================================================
