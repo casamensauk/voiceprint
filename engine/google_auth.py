@@ -301,6 +301,13 @@ def get_access_token(db_path: Path | None = None) -> str:
     return access
 
 
+def invalidate_access_token() -> None:
+    """Forget the cached access token so the next call refreshes it from the stored refresh token."""
+    with _lock:
+        _access["token"] = ""
+        _access["expires_at"] = 0.0
+
+
 def disconnect(db_path: Path | None = None) -> dict[str, Any]:
     """Revoke the grant at Google (best effort), delete the stored token, forget the account."""
     with _lock:

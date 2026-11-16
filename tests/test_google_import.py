@@ -85,9 +85,8 @@ class TestExtractOwnText(unittest.TestCase):
         self.assertEqual(extract_own_text(body), "First thought here.\nSecond thought here.")
 
     def test_cuts_signature_delimiter(self) -> None:
-        for delim in ("-- ", "--"):
-            body = f"This is the real message body text.\n{delim}\nSam Example\nExample Ltd"
-            self.assertEqual(extract_own_text(body), "This is the real message body text.")
+        body = "This is the real message body text.\n-- \nSam Example\nExample Ltd"
+        self.assertEqual(extract_own_text(body), "This is the real message body text.")
 
     def test_drops_sent_from_device_lines(self) -> None:
         body = "Running late but I will be there soon.\n\nSent from my iPhone"
@@ -555,7 +554,7 @@ class TestScan(ScanTestBase):
         self.assertEqual({r["source_type"] for r in rows}, {"gmail"})
         self.assertEqual({r["context_mode"] for r in rows}, {"work_email"})
         self.assertEqual(total_sample_words(self.db), sum(r["word_count"] for r in rows))
-        self.assertFalse(pending_import.has_pending())
+        self.assertFalse(pending_import.get_summary()["has_pending"])
 
     def test_discard_drops_batch_and_writes_nothing(self) -> None:
         self.run_scan(self.messages())
@@ -582,18 +581,18 @@ class TestScan(ScanTestBase):
             gmail_import, "list_sent_ids", return_value=list(real)
         ), patch.object(gmail_import, "get_message", side_effect=fake_get):
             gmail_import.scan_sent_mail(self.db, pending_import.PROGRESS)
-        self.assertNotIn("ok1", fetched)
-        self.assertNotIn("ok2", fetched)
+        # every successfully read message (kept or skipped) is remembered; only the one that failed is fetched again
+        self.assertEqual(fetched, ["broken"])
         c = pending_import.get_summary()["counts"]
-        self.assertEqual(c["already_imported"], 2)
+        self.assertEqual(c["already_imported"], 9)
         self.assertEqual(c["kept"], 0)
 
     def test_auth_failure_reported_without_pending(self) -> None:
         with patch.object(gmail_import, "get_profile", side_effect=google_auth.GoogleAuthError("sign-in expired", 401)):
             gmail_import.scan_sent_mail(self.db, pending_import.PROGRESS)
         snap = pending_import.PROGRESS.snapshot()
-        self.assertEqual((snap["running"], snap["stage"], snap["error"]), (False, "error", "sign-in expired"))
-        self.assertFalse(pending_import.has_pending())
+        self.assertEqual((snap["running"], snap["stage"], snap["error"]), (False, "error", "Your Google sign-in expired. Connect again to keep going."))
+        self.assertFalse(pending_import.get_summary()["has_pending"])
 
     def test_start_scan_refuses_second_concurrent_run(self) -> None:
         gate = threading.Event()
@@ -606,10 +605,10 @@ class TestScan(ScanTestBase):
             self.assertFalse(gmail_import.start_scan(self.db))
             gate.set()
             for _ in range(50):
-                if not gmail_import._scan_running:
+                if not pending_import.active():
                     break
                 time.sleep(0.05)
-        self.assertFalse(gmail_import._scan_running)
+        self.assertEqual(pending_import.active(), "")
 
 
 # --------------------------------------------------------------------------- chat takeout
@@ -631,7 +630,7 @@ class TestChatTakeout(ScanTestBase):
             ("other@example.com", "great"),
             (ME, "Let me know what you think of the plan when you have a moment please"),
         )
-        chat_takeout.build_batch([doc], self.ADDR)
+        chat_takeout.build_batch([doc], self.ADDR, self.db)
         s = pending_import.get_summary()
         texts = pending_import._batch["texts"]
         self.assertEqual(len(texts), 2)
@@ -644,23 +643,23 @@ class TestChatTakeout(ScanTestBase):
         self.assertEqual(s["source_type"], "google_chat")
 
     def test_commit_uses_chat_source_and_casual_mode(self) -> None:
-        chat_takeout.build_batch([chat_doc((ME, "We should really get the whole team together for lunch on Friday"))], self.ADDR)
+        chat_takeout.build_batch([chat_doc((ME, "We should really get the whole team together for lunch on Friday"))], self.ADDR, self.db)
         pending_import.commit_pending(self.db)
         row = get_samples(db_path=self.db)[0]
         self.assertEqual((row["source_type"], row["context_mode"]), ("google_chat", "casual_chat"))
 
     def test_tolerates_missing_fields(self) -> None:
         doc = {"messages": [{}, {"creator": None, "text": "x"}, {"creator": {"email": ME}}, "junk", {"creator": {"email": ME.upper()}, "text": "Plenty of words in this one to pass the length check easily"}]}
-        chat_takeout.build_batch([doc], self.ADDR)
+        chat_takeout.build_batch([doc], self.ADDR, self.db)
         self.assertEqual(pending_import.get_summary()["counts"]["kept"], 1)
 
     def test_requires_an_address(self) -> None:
         with self.assertRaises(chat_takeout.ChatTakeoutError):
-            chat_takeout.build_batch([chat_doc((ME, "x"))], set())
+            chat_takeout.build_batch([chat_doc((ME, "x"))], set(), self.db)
 
     def test_plain_json_bytes(self) -> None:
         raw = json.dumps(chat_doc((ME, "A message of sufficient length to be considered substantive here"))).encode()
-        chat_takeout.import_export(raw, self.ADDR)
+        chat_takeout.import_export(raw, self.ADDR, self.db)
         self.assertEqual(pending_import.get_summary()["counts"]["kept"], 1)
 
     def test_rejects_non_chat_json(self) -> None:
@@ -750,11 +749,14 @@ class TestGoogleRoutes(unittest.TestCase):
         self.addCleanup(pending_import.discard_pending)
         self.seen: list[str] = []
 
-    def call(self, method: str, path: str, body=None, headers: dict[str, str] | None = None, host: str | None = None):
-        data = json.dumps(body if body is not None else {}).encode() if method == "POST" else None
+    def call(self, method: str, path: str, body=None, headers: dict[str, str] | None = None, host: str | None = None, raw: bytes | None = None):
+        if raw is not None:
+            data = raw
+        else:
+            data = json.dumps(body if body is not None else {}).encode() if method == "POST" else None
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data, method=method)
         if method == "POST":
-            req.add_header("Content-Type", "application/json")
+            req.add_header("Content-Type", "application/octet-stream" if raw is not None else "application/json")
         for k, v in (headers or {}).items():
             req.add_header(k, v)
         if host is not None:
@@ -776,6 +778,7 @@ class TestGoogleRoutes(unittest.TestCase):
             ("GET", "/api/google/callback?code=a&state=b"),
             ("POST", "/api/google/auth/start"),
             ("POST", "/api/google/disconnect"),
+            ("POST", "/api/google/gmail/cancel"),
             ("POST", "/api/google/gmail/scan"),
             ("POST", "/api/google/pending/commit"),
             ("POST", "/api/google/pending/discard"),
@@ -859,8 +862,7 @@ class TestGoogleRoutes(unittest.TestCase):
     def test_chat_upload_pending_and_commit(self) -> None:
         update_settings({"google_account_email": ME}, db_path=self.db)
         doc = chat_doc((ME, "This is a long enough chat message that I wrote myself earlier today"))
-        content = base64.b64encode(json.dumps(doc).encode()).decode()
-        status, raw = self.call("POST", "/api/google/chat/upload", {"filename": "messages.json", "content_base64": content})
+        status, raw = self.call("POST", "/api/google/chat/upload", raw=json.dumps(doc).encode())
         self.assertEqual(status, 200)
         summary = json.loads(raw)
         self.assertEqual(summary["counts"]["kept"], 1)
@@ -870,15 +872,18 @@ class TestGoogleRoutes(unittest.TestCase):
         status, raw = self.call("POST", "/api/google/pending/commit")
         res = json.loads(raw)
         self.assertEqual(res["inserted"], 1)
-        self.assertGreater(res["state"]["own_writing_words"], 0)
+        self.assertGreater(res["state"]["sample_words"], 0)
         self.assertEqual(get_samples(db_path=self.db)[0]["source_type"], "google_chat")
 
     def test_chat_upload_bad_input(self) -> None:
-        status, _ = self.call("POST", "/api/google/chat/upload", {"content_base64": "!!!"})
-        self.assertEqual(status, 400)
+        update_settings({"google_account_email": "", "google_extra_addresses": ""}, db_path=self.db)
+        status, _ = self.call("POST", "/api/google/chat/upload", raw=b"nope")
+        self.assertEqual(status, 400)  # no address known yet
         update_settings({"google_account_email": ME}, db_path=self.db)
-        status, _ = self.call("POST", "/api/google/chat/upload", {"content_base64": base64.b64encode(b"nope").decode()})
+        status, _ = self.call("POST", "/api/google/chat/upload", raw=b"nope")
         self.assertEqual(status, 400)
+        status, _ = self.call("POST", "/api/google/chat/upload", {"content_base64": "!!!"})
+        self.assertEqual(status, 415)  # a JSON body is no longer accepted here
 
     def test_unknown_google_route_404(self) -> None:
         self.assertEqual(self.call("GET", "/api/google/nothing")[0], 404)

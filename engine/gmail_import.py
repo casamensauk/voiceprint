@@ -17,25 +17,55 @@ from pathlib import Path
 from typing import Any
 
 from engine import google_auth, pending_import
-from engine.db import get_imported_ids, get_samples, get_settings
+from engine.db import get_imported_ids, get_sample_contents, get_settings
 from engine.own_text import extract_own_text, is_substantive, mask_private_details
 
 API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 SOURCE = "gmail"
 _RETRY_STATUSES = (429, 500, 502, 503, 504)
+_RATE_LIMIT_REASONS = ("ratelimitexceeded", "userratelimitexceeded")
+_MAX_ATTEMPTS = 4
+_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+_MAX_RETRY_AFTER = 30.0
+_MAX_LIST_PAGES = 2000
+_MAX_CONSECUTIVE_FAILURES = 25
+_SIGN_IN_EXPIRED = "Your Google sign-in expired. Connect again to keep going."
 _sleep = time.sleep
 
 
 class GmailError(Exception):
     """Gmail API failure. Never carries tokens or message text."""
 
-    def __init__(self, message: str, status_code: int = 502) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 502,
+        retry_after: float | None = None,
+        reason: str = "",
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.retry_after = retry_after
+        self.reason = reason
 
 
 # --------------------------------------------------------------------------- http
+
+
+def _error_reason(raw: bytes) -> str:
+    """The machine reason Google gives for an error (e.g. rateLimitExceeded). Never message text."""
+    try:
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+        err = data.get("error") if isinstance(data, dict) else None
+        if isinstance(err, dict):
+            errors = err.get("errors")
+            if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+                return str(errors[0].get("reason") or "")
+            return str(err.get("status") or "")
+    except (ValueError, AttributeError):
+        pass
+    return ""
 
 
 def _http_get(url: str, token: str, timeout: float = 30.0) -> dict[str, Any]:
@@ -45,7 +75,17 @@ def _http_get(url: str, token: str, timeout: float = 30.0) -> dict[str, Any]:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as err:
-        raise GmailError(f"Gmail request failed ({int(err.code)}).", int(err.code)) from None
+        retry_after: float | None = None
+        try:
+            retry_after = float(err.headers.get("Retry-After")) if err.headers.get("Retry-After") else None
+        except (TypeError, ValueError):
+            retry_after = None
+        reason = ""
+        try:
+            reason = _error_reason(err.read(8192))
+        except Exception:
+            reason = ""
+        raise GmailError(f"Gmail request failed ({int(err.code)}).", int(err.code), retry_after, reason) from None
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
         raise GmailError("Could not reach Gmail.", 502) from None
     try:
@@ -57,17 +97,36 @@ def _http_get(url: str, token: str, timeout: float = 30.0) -> dict[str, Any]:
     return data
 
 
+def _retryable(err: GmailError) -> bool:
+    if err.status_code in _RETRY_STATUSES:
+        return True
+    return err.status_code == 403 and err.reason.strip().lower() in _RATE_LIMIT_REASONS
+
+
 def _api_get(path: str, params: dict[str, Any] | None = None, db_path: Path | None = None) -> dict[str, Any]:
+    """GET with up to 4 attempts (1, 2, 4 s backoff, honouring Retry-After) and one token refresh on a 401."""
     query = urllib.parse.urlencode(params or {}, doseq=True)
     url = f"{API_BASE}/{path}" + (f"?{query}" if query else "")
-    token = google_auth.get_access_token(db_path)
-    try:
-        return _http_get(url, token)
-    except GmailError as err:
-        if err.status_code not in _RETRY_STATUSES:
-            raise
-    _sleep(1.5)
-    return _http_get(url, google_auth.get_access_token(db_path))
+    attempt = 0
+    refreshed = False
+    while True:
+        token = google_auth.get_access_token(db_path)
+        try:
+            return _http_get(url, token)
+        except GmailError as err:
+            if err.status_code == 401:
+                if refreshed:
+                    raise google_auth.GoogleAuthError(_SIGN_IN_EXPIRED, 401) from None
+                refreshed = True
+                google_auth.invalidate_access_token()
+                continue
+            attempt += 1
+            if not _retryable(err) or attempt >= _MAX_ATTEMPTS:
+                raise
+            delay = _BACKOFF_SECONDS[attempt - 1]
+            if err.retry_after is not None:
+                delay = max(delay, min(float(err.retry_after), _MAX_RETRY_AFTER))
+            _sleep(delay)
 
 
 def get_profile(db_path: Path | None = None) -> str:
@@ -79,8 +138,9 @@ def get_profile(db_path: Path | None = None) -> str:
 
 def list_sent_ids(db_path: Path | None = None) -> list[str]:
     ids: list[str] = []
+    seen_pages: set[str] = set()
     page = ""
-    while True:
+    for _ in range(_MAX_LIST_PAGES):
         params: dict[str, Any] = {"labelIds": "SENT", "maxResults": 500}
         if page:
             params["pageToken"] = page
@@ -89,8 +149,10 @@ def list_sent_ids(db_path: Path | None = None) -> list[str]:
             if isinstance(item, dict) and item.get("id"):
                 ids.append(str(item["id"]))
         page = str(data.get("nextPageToken") or "")
-        if not page:
-            return ids
+        if not page or page in seen_pages:
+            break
+        seen_pages.add(page)
+    return ids
 
 
 def get_message(message_id: str, db_path: Path | None = None) -> dict[str, Any]:
@@ -237,10 +299,37 @@ def classify_message(msg: dict[str, Any], addresses: set[str]) -> tuple[str, str
     return "ok", extract_body(payload)
 
 
+def own_text_from_payload(payload: dict[str, Any]) -> str:
+    """The user's own words. With both parts present, clean each and keep the shorter non-empty result.
+
+    The HTML part has real quote and signature markup removed, so it catches quotes in any language;
+    the plain part catches what only text rules can. The shorter result is the one with less of other people's words.
+    """
+    plain = html_part = None
+    for part in _iter_parts(payload):
+        if part.get("filename"):
+            continue
+        mime = str(part.get("mimeType") or "").lower()
+        if mime == "text/plain" and plain is None and (part.get("body") or {}).get("data"):
+            plain = part
+        elif mime == "text/html" and html_part is None and (part.get("body") or {}).get("data"):
+            html_part = part
+    candidates: list[str] = []
+    if plain is not None:
+        candidates.append(extract_own_text(_decode_part(plain)))
+    if html_part is not None:
+        candidates.append(extract_own_text(html_to_text(_decode_part(html_part))))
+    candidates = [c for c in candidates if c]
+    return min(candidates, key=len) if candidates else ""
+
+
 # --------------------------------------------------------------------------- scan
 
-_scan_lock = threading.Lock()
-_scan_running = False
+_FAILURE_REASONS = {
+    "auth": "your Google sign-in expired",
+    "network": "Google stopped responding",
+    "cancel": "you cancelled it",
+}
 
 
 def _text_key(text: str) -> str:
@@ -248,33 +337,45 @@ def _text_key(text: str) -> str:
 
 
 def scan_running() -> bool:
-    return pending_import.PROGRESS.snapshot()["running"]
+    return pending_import.active() == "scan"
 
 
 def start_scan(db_path: Path | None = None) -> bool:
-    """Start the background scan. Returns False if one is already running."""
-    global _scan_running
-    with _scan_lock:
-        if _scan_running:
-            return False
-        _scan_running = True
+    """Start the background scan. Returns False if a scan or upload is running, or a list is waiting for review."""
+    if pending_import.claim("scan"):
+        return False
     pending_import.PROGRESS.reset(running=True, stage="listing")
 
     def _run() -> None:
-        global _scan_running
         try:
             scan_sent_mail(db_path, pending_import.PROGRESS)
         finally:
-            with _scan_lock:
-                _scan_running = False
+            if pending_import.PROGRESS.snapshot()["running"]:
+                pending_import.PROGRESS.update(running=False)
+            pending_import.release("scan")
 
     threading.Thread(target=_run, daemon=True).start()
     return True
 
 
+def _plain_error(err: Exception) -> str:
+    if isinstance(err, google_auth.GoogleAuthError):
+        if err.status_code == 401:
+            return _SIGN_IN_EXPIRED
+        return err.message
+    if isinstance(err, GmailError):
+        return "Google could not be reached. Check your connection and try again."
+    return "The scan stopped unexpectedly. Try again."
+
+
 def scan_sent_mail(db_path: Path | None, progress: pending_import.ScanProgress) -> None:
+    generation = pending_import.current_generation()
     counts = pending_import.new_counts()
-    progress.reset(running=True, stage="listing")
+    kept: list[str] = []
+    items: list[tuple[str, str, str]] = []  # (source, message id, kept|skipped) for every message read successfully
+    partial_reason = ""
+    fatal: Exception | None = None
+    progress.update(running=True, stage="listing", done=0, total=0, error="")
     try:
         settings = get_settings(db_path)
         addresses = own_addresses(settings, get_profile(db_path=db_path))
@@ -284,44 +385,75 @@ def scan_sent_mail(db_path: Path | None, progress: pending_import.ScanProgress) 
         todo = [i for i in ids if i not in done_ids]
         counts["already_imported"] = len(ids) - len(todo)
         progress.update(stage="reading", done=0, total=len(todo))
-        kept: list[str] = []
-        kept_ids: list[str] = []
-        seen: set[str] = {_text_key(s["content"]) for s in get_samples(limit=1_000_000, db_path=db_path)}
+        seen: set[str] = {_text_key(c) for c in get_sample_contents(db_path)}
+        consecutive_failures = 0
         for n, mid in enumerate(todo, start=1):
+            if progress.cancelled():
+                partial_reason = _FAILURE_REASONS["cancel"]
+                break
             try:
                 msg = get_message(mid, db_path)
-            except google_auth.GoogleAuthError:
-                raise
-            except GmailError:
-                counts["failed"] += 1
-                progress.update(done=n)
-                continue
-            status, body = classify_message(msg, addresses)
-            if status == "not_user":
-                counts["not_user"] += 1
-            elif status == "automatic":
-                counts["automatic"] += 1
-            else:
-                text = extract_own_text(body)
-                if not text:
-                    counts["empty"] += 1
+                status, _body = classify_message(msg, addresses)
+                outcome = "skipped"
+                if status == "not_user":
+                    counts["not_user"] += 1
+                elif status == "automatic":
+                    counts["automatic"] += 1
                 else:
-                    text = mask_private_details(text)
-                    key = _text_key(text)
-                    if not is_substantive(text):
-                        counts["too_short"] += 1
-                    elif key in seen:
-                        counts["duplicates"] += 1
+                    text = own_text_from_payload(msg.get("payload") or {})
+                    if not text:
+                        counts["empty"] += 1
                     else:
-                        seen.add(key)
-                        kept.append(text)
-                        kept_ids.append(mid)
+                        text = mask_private_details(text)
+                        key = _text_key(text)
+                        if not is_substantive(text):
+                            counts["too_short"] += 1
+                        elif key in seen:
+                            counts["duplicates"] += 1
+                        else:
+                            seen.add(key)
+                            kept.append(text)
+                            outcome = "kept"
+                items.append((SOURCE, mid, outcome))
+                consecutive_failures = 0
+            except google_auth.GoogleAuthError as err:
+                fatal = err
+                partial_reason = _FAILURE_REASONS["auth"] if err.status_code == 401 else "Google sign-in could not be refreshed"
+                break
+            except Exception as err:
+                counts["failed"] += 1
+                consecutive_failures += 1
+                if isinstance(err, GmailError) and consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                    fatal = err
+                    partial_reason = _FAILURE_REASONS["network"]
+                    progress.update(done=n)
+                    break
             progress.update(done=n)
-        pending_import.set_pending(
-            source_type="gmail", context_mode="work_email", texts=kept, ids=[(SOURCE, i) for i in kept_ids], counts=counts
-        )
-        progress.update(running=False, stage="review")
     except (google_auth.GoogleAuthError, GmailError) as err:
-        progress.update(running=False, stage="error", error=err.message)
-    except Exception:
-        progress.update(running=False, stage="error", error="The scan stopped unexpectedly.")
+        fatal = err
+    except Exception as err:
+        fatal = err
+    if fatal is not None and not partial_reason:
+        # Failed before anything could be read (sign-in, address or listing): nothing to park.
+        progress.update(running=False, stage="error", error=_plain_error(fatal))
+        return
+    if partial_reason and not kept:
+        if fatal is not None:
+            progress.update(running=False, stage="error", error=_plain_error(fatal))
+        else:
+            progress.update(running=False, stage="idle", error="")
+        return
+    parked = pending_import.set_pending(
+        source_type="gmail",
+        context_mode="work_email",
+        texts=kept,
+        ids=items,
+        counts=counts,
+        expected_generation=generation,
+        partial=bool(partial_reason),
+        partial_reason=partial_reason,
+    )
+    if parked:
+        progress.update(running=False, stage="review")
+    else:
+        progress.update(running=False, stage="idle")

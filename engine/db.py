@@ -175,6 +175,9 @@ def init_db(db_path: Path | None = None) -> None:
             );
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(imported_messages)").fetchall()}
+        if "kind" not in columns:
+            conn.execute("ALTER TABLE imported_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'kept'")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
@@ -307,15 +310,55 @@ def get_imported_ids(source: str, db_path: Path | None = None) -> set[str]:
     return {r["external_id"] for r in rows}
 
 
-def record_imported_ids(source: str, ids: list[str], db_path: Path | None = None) -> None:
+def record_imported_ids(source: str, ids: list[str], db_path: Path | None = None, kind: str = "kept") -> None:
     """Remember imported message ids so a later scan skips them."""
     init_db(db_path)
     with get_connection(db_path) as conn:
         conn.executemany(
-            "INSERT OR IGNORE INTO imported_messages (source, external_id) VALUES (?, ?)",
-            [(source, i) for i in ids],
+            "INSERT OR IGNORE INTO imported_messages (source, external_id, kind) VALUES (?, ?, ?)",
+            [(source, i, kind) for i in ids],
         )
-        conn.commit()
+
+
+def get_sample_contents(db_path: Path | None = None) -> list[str]:
+    """Only the text of every stored sample (used for duplicate checks), never the whole rows."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        return [row["content"] for row in conn.execute("SELECT content FROM samples").fetchall()]
+
+
+def commit_import_batch(
+    items: list[str],
+    imported: list[tuple[str, str, str]],
+    context_mode: str,
+    source_type: str,
+    weight: float = 1.0,
+    db_path: Path | None = None,
+) -> int:
+    """Insert samples and record message ids in ONE transaction. Raises (and writes nothing) on any failure."""
+    init_db(db_path)
+    now = utc_now()
+    with get_connection(db_path) as conn:
+        existing = {
+            row["content"].strip()
+            for row in conn.execute("SELECT content FROM samples WHERE context_mode = ?", (context_mode,)).fetchall()
+        }
+        rows = []
+        for item in items:
+            cleaned = item.strip()
+            if not cleaned or cleaned in existing:
+                continue
+            existing.add(cleaned)
+            rows.append((context_mode, source_type, cleaned, len(cleaned.split()), float(weight), now))
+        conn.executemany(
+            "INSERT INTO samples (context_mode, source_type, content, word_count, weight, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.executemany(
+            "INSERT OR IGNORE INTO imported_messages (source, external_id, kind) VALUES (?, ?, ?)",
+            imported,
+        )
+    return len(rows)
 
 
 def get_samples(
@@ -349,15 +392,25 @@ def delete_sample(sample_id: int, db_path: Path | None = None) -> bool:
 
 
 def clear_samples(context_mode: str | None = None, db_path: Path | None = None) -> int:
-    """Delete all samples (or only those for a specific context_mode)."""
+    """Delete all samples (or only those for a specific context_mode).
+
+    The remembered message ids of every source whose samples were removed are forgotten too,
+    so that mail or chats can be imported again. Deleting a single sample leaves them alone.
+    """
     init_db(db_path)
     with get_connection(db_path) as conn:
         if context_mode:
+            sources = [r["source_type"] for r in conn.execute("SELECT DISTINCT source_type FROM samples WHERE context_mode = ?", (context_mode,))]
             cur = conn.execute("DELETE FROM samples WHERE context_mode = ?", (context_mode,))
         else:
+            sources = None
             cur = conn.execute("DELETE FROM samples")
-        conn.commit()
-        return cur.rowcount
+        removed = cur.rowcount
+        if sources is None:
+            conn.execute("DELETE FROM imported_messages")
+        elif sources:
+            conn.executemany("DELETE FROM imported_messages WHERE source = ?", [(s,) for s in sources])
+        return removed
 
 
 def upsert_learned_replacement(
