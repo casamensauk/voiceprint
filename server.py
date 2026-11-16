@@ -10,6 +10,7 @@ import mimetypes
 import os
 import subprocess
 import sys
+from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -49,10 +50,12 @@ from engine.db import (  # noqa: E402
     get_samples,
     get_settings,
     init_db,
+    total_sample_words,
     seed_demo_samples,
     update_settings,
     upsert_learned_replacement,
 )
+from engine import chat_takeout, gmail_import, google_auth, pending_import  # noqa: E402
 from engine.importers import parse_imported_content  # noqa: E402
 from engine.pangram_client import (  # noqa: E402
     PangramError,
@@ -138,12 +141,17 @@ def build_state_payload(requested_mode: str | None = None) -> dict[str, Any]:
         "pangram_scans": get_pangram_scans(limit=20),
         "pangram_agreement": pangram_agreement(),
         "maturity": _compute_maturity(len(all_samples), gold_edits, len(all_rules)),
+        "sample_words": total_sample_words(),
     }
 
 
 def _persist_pangram_result(res: dict[str, Any], title: str) -> int:
     """Save a completed Pangram text, file, or plagiarism scan in SQLite."""
     return persist_pangram_result(res, title)
+
+
+MAX_CHAT_UPLOAD_BYTES = 210 * 1024 * 1024
+MAX_JSON_BODY_BYTES = 128 * 1024 * 1024
 
 
 class VoicePrintHandler(BaseHTTPRequestHandler):
@@ -162,6 +170,157 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(raw)
+
+    def _send_html(self, html_text: str, status: int = 200) -> None:
+        raw = html_text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _guard(self) -> bool:
+        """Every request: Host must be this server, and any Origin must be this app's own (blocks DNS rebinding and CSRF)."""
+        port = self.server.server_port
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+            self._send_json({"error": "Forbidden host"}, status=403)
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None and origin.strip().lower() not in (
+            f"http://127.0.0.1:{port}",
+            f"http://localhost:{port}",
+        ):
+            self._send_json({"error": "Forbidden origin"}, status=403)
+            return False
+        return True
+
+    def _content_length(self) -> int:
+        try:
+            return max(0, int(self.headers.get("Content-Length") or 0))
+        except ValueError:
+            return -1
+
+    def _handle_google_get(self, path: str, qs: dict[str, list[str]]) -> bool:
+        if path == "/api/google/status":
+            self._send_json(google_auth.status())
+        elif path == "/api/google/callback":
+            self._google_callback(qs)
+        elif path == "/api/google/progress":
+            self._send_json(pending_import.PROGRESS.snapshot())
+        elif path == "/api/google/pending":
+            self._send_json(pending_import.get_summary())
+        else:
+            return False
+        return True
+
+    def _google_callback(self, qs: dict[str, list[str]]) -> None:
+        page = (
+            "<!doctype html><meta charset=utf-8><title>VoicePrint</title>"
+            "<body style=\"font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem\">"
+            "<h2>{title}</h2><p>{message}</p></body>"
+        )
+        if not google_auth.has_pending_flow():
+            self._send_html(page.format(title="Nothing to finish", message="No sign-in is in progress. Start again from VoicePrint."), 400)
+            return
+        if (qs.get("error") or [""])[0]:
+            self._send_html(page.format(title="Sign-in cancelled", message="Google did not grant access. You can close this tab."), 400)
+            return
+        code = (qs.get("code") or [""])[0]
+        state = (qs.get("state") or [""])[0]
+        try:
+            google_auth.finish_flow(code, state, self.server.server_port)
+        except google_auth.GoogleAuthError as err:
+            self._send_html(page.format(title="Sign-in failed", message=html_escape(err.message)), 400)
+            return
+        self._send_html(page.format(title="Connected", message="You can close this tab and return to VoicePrint."))
+
+    def _handle_google_post(self, path: str, body: dict[str, Any]) -> bool:
+        if path == "/api/google/auth/start":
+            try:
+                self._send_json({"auth_url": google_auth.start_flow(self.server.server_port)})
+            except google_auth.GoogleAuthError as err:
+                self._send_json({"error": err.message}, status=err.status_code)
+        elif path == "/api/google/disconnect":
+            self._send_json(google_auth.disconnect())
+        elif path == "/api/google/gmail/scan":
+            if not google_auth.status()["connected"]:
+                self._send_json({"error": "Connect Google first."}, status=400)
+            elif not gmail_import.start_scan():
+                self._send_json({"error": self._busy_message()}, status=409)
+            else:
+                self._send_json({"started": True})
+        elif path == "/api/google/gmail/cancel":
+            self._send_json({"cancelled": pending_import.PROGRESS.request_cancel()})
+        elif path == "/api/google/pending/commit":
+            if pending_import.active():
+                self._send_json({"error": "Wait for the current scan or file to finish first."}, status=409)
+                return True
+            res = pending_import.commit_pending()
+            if res.get("error"):
+                self._send_json({"error": res["error"]}, status=500)
+            else:
+                self._send_json({**res, "state": build_state_payload(None)})
+        elif path == "/api/google/pending/discard":
+            self._send_json({"discarded": pending_import.discard_pending()})
+        else:
+            return False
+        return True
+
+    @staticmethod
+    def _busy_message() -> str:
+        what = pending_import.active()
+        if what == "scan":
+            return "A scan is already running."
+        if what == "upload":
+            return "A file is already being read."
+        return "Import or discard the list you are reviewing first."
+
+    def _handle_chat_upload(self) -> None:
+        """Raw file body (a messages.json or a Takeout .zip), one at a time, never while a list awaits review."""
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/octet-stream":
+            self._send_json({"error": "Unsupported content type"}, status=415)
+            return
+        length = self._content_length()
+        if length <= 0:
+            self._send_json({"error": "No file was received."}, status=400)
+            return
+        if length > MAX_CHAT_UPLOAD_BYTES:
+            self._send_json({"error": "That file is larger than 200 MB."}, status=413)
+            return
+        reason = pending_import.claim("upload")
+        if reason:
+            self._send_json({"error": reason}, status=409)
+            return
+        try:
+            addresses = gmail_import.own_addresses(get_settings())
+            if not addresses:
+                self._send_json(
+                    {"error": "Connect Google or add your address in Settings first, so your own messages can be found."},
+                    status=400,
+                )
+                return
+            generation = pending_import.current_generation()
+            data = bytearray()
+            while len(data) < length:
+                chunk = self.rfile.read(min(1 << 20, length - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+            if len(data) < length:
+                self._send_json({"error": "The upload was cut short. Try again."}, status=400)
+                return
+            payload = bytes(data)
+            del data
+            chat_takeout.import_export(payload, addresses, expected_generation=generation)
+        except chat_takeout.ChatTakeoutError as err:
+            self._send_json({"error": err.message}, status=err.status_code)
+            return
+        finally:
+            pending_import.release("upload")
+        self._send_json(pending_import.get_summary())
 
     def _send_file(self, file_path: Path, head_only: bool = False) -> None:
         if not file_path.is_file() or STATIC_DIR not in file_path.resolve().parents and file_path.resolve() != STATIC_DIR / "index.html":
@@ -202,6 +361,8 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
         return json.loads(raw) if raw.strip() else {}
 
     def do_HEAD(self) -> None:  # noqa: N802
+        if not self._guard():
+            return
         path = urlparse(self.path).path
         if path == "/":
             self._send_file(STATIC_DIR / "index.html", head_only=True)
@@ -219,6 +380,13 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
+        if not self._guard():
+            return
+
+        if path.startswith("/api/google/"):
+            if not self._handle_google_get(path, qs):
+                self._send_json({"error": "Endpoint not found"}, status=404)
+            return
 
         if path == "/":
             self._send_file(STATIC_DIR / "index.html")
@@ -292,10 +460,35 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
+        if not self._guard():
+            return
+        if path == "/api/google/chat/upload":
+            self._handle_chat_upload()
+            return
+        length = self._content_length()
+        if length < 0:
+            self._send_json({"error": "Invalid Content-Length"}, status=400)
+            return
+        if length > 0:
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self._send_json({"error": "Content-Type must be application/json"}, status=415)
+                return
+            if length > MAX_JSON_BODY_BYTES:
+                self._send_json({"error": "Request too large"}, status=413)
+                return
         try:
             body = self._read_json_body()
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             self._send_json({"error": "Invalid JSON body"}, status=400)
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "Invalid JSON body"}, status=400)
+            return
+
+        if path.startswith("/api/google/"):
+            if not self._handle_google_post(path, body):
+                self._send_json({"error": "Endpoint not found"}, status=404)
             return
 
         if path == "/api/clipboard":
@@ -543,6 +736,8 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Endpoint not found"}, status=404)
 
     def do_DELETE(self) -> None:  # noqa: N802
+        if not self._guard():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)

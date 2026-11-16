@@ -90,7 +90,7 @@
         <!-- Update button -->
         <button type="button" class="btn btn-secondary btn-sm" id="btn-check-update" title="Check GitHub for VoicePrint updates">
           <span class="update-dot" id="update-btn-dot" style="display: none;"></span>
-          <span id="update-btn-label">v1.2.6 · Update</span>
+          <span id="update-btn-label">v1.2.9 · Update</span>
         </button>
 
         <!-- Settings button -->
@@ -469,6 +469,71 @@
         </div>
 
         <div class="samples-layout">
+          <!-- My sent mail & chat (Google) -->
+          <div class="card google-card" id="google-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <div>
+                  <h3 class="card-title">My sent mail &amp; chat</h3>
+                  <p class="card-subtitle">Only what you wrote yourself. Nothing is saved until you confirm.</p>
+                </div>
+              </div>
+              <span class="text-muted" id="google-own-words">Your samples: 0 words</span>
+            </div>
+            <div class="card-body">
+              <p class="field-hint text-rose" id="google-error" role="alert" style="display: none;"></p>
+              <div id="google-state-setup" style="display: none;">
+                <p>To read your sent mail, VoicePrint needs its own Google access. Set it up in Settings.</p>
+                <button type="button" class="btn btn-primary" id="btn-google-open-settings">Open Settings</button>
+              </div>
+              <div id="google-state-connect" style="display: none;">
+                <button type="button" class="btn btn-primary" id="btn-google-connect">Connect Google</button>
+                <p class="field-hint" id="google-waiting" style="display: none;">
+                  Waiting for you to finish signing in with Google&hellip;
+                  <button type="button" class="btn btn-ghost btn-sm" id="btn-google-wait-cancel">Cancel</button>
+                </p>
+                <p class="field-hint" id="google-connect-note"></p>
+              </div>
+              <div id="google-state-ready" style="display: none;">
+                <p>Connected as <strong id="google-email"></strong></p>
+                <div class="import-actions-row">
+                  <button type="button" class="btn btn-primary" id="btn-google-scan">Scan sent mail</button>
+                </div>
+              </div>
+              <div id="google-chat-row" style="display: none;">
+                <div class="import-actions-row">
+                  <button type="button" class="btn btn-secondary" id="btn-google-chat">Import Chat export</button>
+                  <input type="file" id="google-chat-file" accept=".json,.zip" style="display: none;">
+                </div>
+                <p class="field-hint" id="google-chat-note"></p>
+              </div>
+              <div id="google-state-progress" style="display: none;">
+                <p id="google-progress-text">Reading&hellip;</p>
+                <progress id="google-progress-bar" max="100" value="0" style="width: 100%;"></progress>
+                <div class="import-actions-row">
+                  <button type="button" class="btn btn-secondary" id="btn-google-cancel">Cancel</button>
+                </div>
+              </div>
+              <div id="google-state-review" style="display: none;">
+                <p><strong id="google-review-headline"></strong></p>
+                <p id="google-review-partial" class="field-hint" style="display: none;"></p>
+                <details id="google-review-why">
+                  <summary id="google-review-why-summary">Why were some skipped?</summary>
+                  <ul id="google-review-counts"></ul>
+                </details>
+                <div id="google-review-examples">
+                  <p class="field-hint">A few examples of what will be imported:</p>
+                  <div id="google-review-samples"></div>
+                </div>
+                <p class="field-hint" id="google-review-warning">This list is lost if you quit VoicePrint before importing.</p>
+                <div class="import-actions-row">
+                  <button type="button" class="btn btn-primary" id="btn-google-commit">Import samples</button>
+                  <button type="button" class="btn btn-secondary" id="btn-google-discard">Discard</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Bulk Importer Card -->
           <div class="card import-card">
             <div class="card-header">
@@ -1770,6 +1835,39 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
               </div>
             </div>
 
+            <!-- Google sign-in Card -->
+            <div class="provider-config-card" id="card-setting-google">
+              <div class="provider-card-head">
+                <span class="provider-card-name">Google sign-in</span>
+                <span class="provider-status-badge badge-unconfigured" id="badge-google">Not Configured</span>
+              </div>
+              <ol class="field-hint" style="padding-left: 1.25rem; margin: 0 0 0.75rem;">
+                <li>Open console.cloud.google.com and create a project.</li>
+                <li>Turn on the Gmail API.</li>
+                <li>Under &ldquo;OAuth consent screen&rdquo;, choose External and add yourself as a test user.</li>
+                <li>Under Credentials, create an OAuth client of type &ldquo;Desktop app&rdquo; and paste its ID and secret here.</li>
+              </ol>
+              <div class="form-group">
+                <label for="setting-google-client-id" class="form-label">Client ID</label>
+                <input type="text" id="setting-google-client-id" class="form-input" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="form-group">
+                <label for="setting-google-client-secret" class="form-label">Client secret</label>
+                <div class="input-with-action">
+                  <input type="password" id="setting-google-client-secret" class="form-input" placeholder="Leave blank to keep existing secret" autocomplete="off">
+                  <button type="button" class="btn btn-ghost btn-sm text-rose" id="btn-clear-google-secret" title="Clear saved client secret">Clear</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="setting-google-extra-addresses" class="form-label">Other addresses you send from <span class="text-muted">(Optional)</span></label>
+                <input type="text" id="setting-google-extra-addresses" class="form-input" placeholder="alias@example.com, other@example.com" autocomplete="off">
+              </div>
+              <div class="form-group" id="google-settings-connected" style="display: none;">
+                <span class="field-hint">Connected as <strong id="google-settings-email"></strong></span>
+                <button type="button" class="btn btn-ghost btn-sm text-rose" id="btn-google-disconnect">Disconnect</button>
+              </div>
+            </div>
+
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" id="btn-cancel-settings">Cancel</button>
               <button type="submit" class="btn btn-primary" id="btn-save-settings">Save Settings</button>
@@ -1800,7 +1898,7 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
           <div class="update-version-grid">
             <div class="update-ver-box">
               <span class="form-label">Current Version</span>
-              <strong class="font-mono" id="update-current-ver">v1.2.2</strong>
+              <strong class="font-mono" id="update-current-ver">v1.2.9</strong>
             </div>
             <div class="update-ver-box">
               <span class="form-label">Latest GitHub Release</span>

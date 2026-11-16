@@ -347,11 +347,358 @@
 
     // Toast Container
     dom.toastContainer = document.getElementById("toast-container");
+
+    // Google sign-in (settings + Grow With Me card)
+    for (const [key, id] of Object.entries({
+      settingGoogleClientId: "setting-google-client-id",
+      settingGoogleSecret: "setting-google-client-secret",
+      settingGoogleExtra: "setting-google-extra-addresses",
+      badgeGoogle: "badge-google",
+      btnClearGoogleSecret: "btn-clear-google-secret",
+      gOwnWords: "google-own-words",
+      gError: "google-error",
+      gSetup: "google-state-setup",
+      gConnect: "google-state-connect",
+      gReady: "google-state-ready",
+      gProgress: "google-state-progress",
+      gReview: "google-state-review",
+      gConnectBtn: "btn-google-connect",
+      gWaiting: "google-waiting",
+      gConnectNote: "google-connect-note",
+      gScanBtn: "btn-google-scan",
+      gEmail: "google-email",
+      gChatRow: "google-chat-row",
+      gChatBtn: "btn-google-chat",
+      gChatNote: "google-chat-note",
+      gProgressText: "google-progress-text",
+      gProgressBar: "google-progress-bar",
+      gCancel: "btn-google-cancel",
+      gReviewHeadline: "google-review-headline",
+      gReviewPartial: "google-review-partial",
+      gReviewWhy: "google-review-why",
+      gReviewWhySummary: "google-review-why-summary",
+      gReviewCounts: "google-review-counts",
+      gReviewExamples: "google-review-examples",
+      gReviewSamples: "google-review-samples",
+      gReviewWarning: "google-review-warning",
+      gCommit: "btn-google-commit",
+      gDiscard: "btn-google-discard",
+      gChatFile: "google-chat-file",
+      gSettingsConnected: "google-settings-connected",
+      gSettingsEmail: "google-settings-email",
+    })) {
+      dom[key] = document.getElementById(id);
+    }
+  }
+
+  // =========================================================================
+  // Google sign-in: my sent mail & chat
+  // =========================================================================
+  const GOOGLE_SIGN_IN_TIMEOUT_MS = 5 * 60 * 1000;
+  const GOOGLE_MAX_UPLOAD_BYTES = 210 * 1024 * 1024;
+  const googleUi = {
+    status: null,
+    progress: null,
+    pending: null,
+    timer: null,
+    waitingForSignIn: false,
+    waitStartedAt: 0,
+    uploading: false,
+    stopping: false,
+    error: "",
+    scanErrorHidden: false,
+  };
+
+  // Reasons a message was skipped (kept messages are shown in the headline, not here).
+  const GOOGLE_SKIP_LABELS = [
+    ["already_imported", (n) => `${n.toLocaleString()} already imported before`],
+    ["not_user", (n) => `${n.toLocaleString()} not written by you`],
+    ["automatic", (n) => `${n.toLocaleString()} automatic or calendar messages`],
+    ["empty", (n) => `${n.toLocaleString()} empty once quoted text was removed`],
+    ["too_short", (n) => `${n.toLocaleString()} too short to use`],
+    ["duplicates", (n) => `${n.toLocaleString()} duplicates`],
+    ["failed", (n) => `${n.toLocaleString()} could not be read`],
+  ];
+
+  function showOnly(which) {
+    for (const key of ["gSetup", "gConnect", "gReady", "gProgress", "gReview"]) {
+      if (dom[key]) dom[key].style.display = key === which ? "block" : "none";
+    }
+  }
+
+  function renderGoogleSettings() {
+    const s = appState.settings || {};
+    if (dom.settingGoogleClientId) dom.settingGoogleClientId.value = s.google_client_id || "";
+    if (dom.settingGoogleExtra) dom.settingGoogleExtra.value = s.google_extra_addresses || "";
+    if (dom.badgeGoogle) {
+      const ok = Boolean(s.google_client_secret_configured && s.google_client_id);
+      dom.badgeGoogle.textContent = ok ? `Configured (${s.google_client_secret_preview || "••••"})` : "Not Configured";
+      dom.badgeGoogle.className = `provider-status-badge ${ok ? "badge-configured" : "badge-unconfigured"}`;
+    }
+  }
+
+  // Plain-language text for something that went wrong; never a status code or a technical term.
+  function googlePlainError(err, fallback) {
+    const detail = String((err && err.detail) || "").trim();
+    if (detail && !/^(failed to fetch|load failed|networkerror)/i.test(detail)) return detail;
+    return fallback;
+  }
+
+  function googleNoteText(note) {
+    if (!note) return "";
+    if (/sign-in expired/i.test(note)) return "Your Google sign-in expired. Connect again to keep going.";
+    return note;
+  }
+
+  function googleHasAddress() {
+    const st = googleUi.status;
+    const extra = String((appState.settings || {}).google_extra_addresses || "").trim();
+    return Boolean((st && st.email) || extra);
+  }
+
+  function renderGoogleError(inProgress) {
+    if (!dom.gError) return;
+    let text = googleUi.error;
+    const prog = googleUi.progress;
+    if (!text && prog && prog.error && !googleUi.scanErrorHidden) text = prog.error;
+    const show = Boolean(text) && !inProgress;
+    dom.gError.textContent = show ? text : "";
+    dom.gError.style.display = show ? "block" : "none";
+  }
+
+  function renderGoogleReview(pend) {
+    const counts = pend.counts || {};
+    const kept = Number(counts.kept || 0);
+    const words = Number(pend.total_words || 0);
+    dom.gReviewCounts.replaceChildren();
+    for (const [key, label] of GOOGLE_SKIP_LABELS) {
+      const n = counts[key] || 0;
+      if (!n) continue;
+      const li = document.createElement("li");
+      li.textContent = label(n);
+      dom.gReviewCounts.appendChild(li);
+    }
+    const hasReasons = dom.gReviewCounts.children.length > 0;
+    if (dom.gReviewWhy) dom.gReviewWhy.style.display = hasReasons ? "block" : "none";
+    if (pend.partial) {
+      dom.gReviewPartial.textContent =
+        `The scan stopped early because ${pend.partial_reason || "something went wrong"}. ` +
+        (kept ? "You can import what was read so far." : "Nothing usable was read before it stopped.");
+      dom.gReviewPartial.style.display = "block";
+    } else {
+      dom.gReviewPartial.textContent = "";
+      dom.gReviewPartial.style.display = "none";
+    }
+    if (kept === 0) {
+      dom.gReviewHeadline.textContent = "Nothing new to import.";
+      if (dom.gReviewWhySummary) dom.gReviewWhySummary.textContent = "Why was nothing kept?";
+      if (dom.gReviewWhy && hasReasons) dom.gReviewWhy.open = true;
+      dom.gReviewExamples.style.display = "none";
+      dom.gReviewWarning.style.display = "none";
+      dom.gCommit.style.display = "none";
+      dom.gDiscard.textContent = "Done";
+      dom.gDiscard.className = "btn btn-primary";
+      return;
+    }
+    dom.gReviewHeadline.textContent = `${kept.toLocaleString()} message${kept === 1 ? "" : "s"} kept, ${words.toLocaleString()} words`;
+    if (dom.gReviewWhySummary) dom.gReviewWhySummary.textContent = "Why were some skipped?";
+    if (dom.gReviewWhy) dom.gReviewWhy.open = false;
+    dom.gReviewSamples.replaceChildren();
+    for (const text of pend.samples || []) {
+      const q = document.createElement("blockquote");
+      q.textContent = text;
+      dom.gReviewSamples.appendChild(q);
+    }
+    dom.gReviewExamples.style.display = "block";
+    dom.gReviewWarning.style.display = "block";
+    dom.gCommit.style.display = "";
+    dom.gCommit.textContent = `Import ${kept.toLocaleString()} sample${kept === 1 ? "" : "s"}`;
+    dom.gDiscard.textContent = "Discard";
+    dom.gDiscard.className = "btn btn-secondary";
+  }
+
+  function renderGoogleCard() {
+    if (!dom.gSetup) return;
+    if (dom.gOwnWords) {
+      dom.gOwnWords.textContent = `Your samples: ${Number(appState.sampleWords || 0).toLocaleString()} words`;
+    }
+    const st = googleUi.status;
+    const prog = googleUi.progress;
+    const pend = googleUi.pending;
+    const connected = Boolean(st && st.connected);
+    if (dom.gSettingsConnected) {
+      dom.gSettingsConnected.style.display = connected ? "" : "none";
+      if (dom.gSettingsEmail) dom.gSettingsEmail.textContent = (st && st.email) || "your Google account";
+    }
+    if (dom.gChatRow) dom.gChatRow.style.display = "none";
+
+    if (prog && prog.running) {
+      renderGoogleError(true);
+      showOnly("gProgress");
+      const total = prog.total || 0;
+      dom.gProgressText.textContent =
+        prog.stage === "listing" || !total
+          ? "Finding your sent mail…"
+          : `Read ${Number(prog.done).toLocaleString()} of ${total.toLocaleString()}`;
+      dom.gProgressBar.max = Math.max(total, 1);
+      dom.gProgressBar.value = prog.done || 0;
+      dom.gCancel.disabled = googleUi.stopping;
+      dom.gCancel.textContent = googleUi.stopping ? "Stopping…" : "Cancel";
+      return;
+    }
+    googleUi.stopping = false;
+    renderGoogleError(false);
+    if (pend && pend.has_pending) {
+      showOnly("gReview");
+      renderGoogleReview(pend);
+      return;
+    }
+    if (!st || !st.configured) {
+      showOnly("gSetup");
+    } else if (!connected) {
+      showOnly("gConnect");
+      dom.gConnectBtn.disabled = googleUi.waitingForSignIn;
+      dom.gWaiting.style.display = googleUi.waitingForSignIn ? "block" : "none";
+      dom.gConnectNote.textContent = googleUi.waitingForSignIn ? "" : googleNoteText(st.note);
+    } else {
+      showOnly("gReady");
+      dom.gEmail.textContent = st.email || "your Google account";
+      dom.gScanBtn.disabled = googleUi.uploading;
+    }
+    if (dom.gChatRow && googleHasAddress()) {
+      dom.gChatRow.style.display = "block";
+      dom.gChatBtn.disabled = googleUi.uploading;
+      dom.gChatBtn.textContent = googleUi.uploading ? "Importing…" : "Import Chat export";
+      dom.gChatNote.textContent = googleUi.uploading ? "Reading your file. This can take a minute for a big export." : "";
+    }
+  }
+
+  async function refreshGoogle() {
+    try {
+      const [st, prog, pend] = await Promise.all([
+        apiRequest("/api/google/status"),
+        apiRequest("/api/google/progress"),
+        apiRequest("/api/google/pending"),
+      ]);
+      googleUi.status = st;
+      googleUi.progress = prog;
+      googleUi.pending = pend;
+      if (prog.running) googleUi.scanErrorHidden = false;
+    } catch (_) {}
+    if (googleUi.waitingForSignIn) {
+      if (googleUi.status?.connected) {
+        googleUi.waitingForSignIn = false;
+      } else if (Date.now() - googleUi.waitStartedAt > GOOGLE_SIGN_IN_TIMEOUT_MS) {
+        googleUi.waitingForSignIn = false;
+        googleUi.error = "Sign-in was not completed. Try again.";
+      }
+    }
+    renderGoogleCard();
+    clearTimeout(googleUi.timer);
+    if (googleUi.progress?.running || googleUi.waitingForSignIn) {
+      googleUi.timer = setTimeout(refreshGoogle, 1500);
+    }
+  }
+
+  async function googleAction(fn, fallbackError) {
+    googleUi.error = "";
+    googleUi.scanErrorHidden = true;
+    try {
+      await fn();
+    } catch (err) {
+      googleUi.error = googlePlainError(err, fallbackError);
+    }
+    await refreshGoogle();
+  }
+
+  function handleGoogleConnect() {
+    if (googleUi.waitingForSignIn) return Promise.resolve();
+    return googleAction(async () => {
+      const res = await apiRequest("/api/google/auth/start", "POST", {});
+      window.open(res.auth_url, "_blank", "noopener");
+      googleUi.waitingForSignIn = true;
+      googleUi.waitStartedAt = Date.now();
+    }, "Could not start Google sign-in. Check your client ID and secret in Settings.");
+  }
+
+  function handleGoogleWaitCancel() {
+    googleUi.waitingForSignIn = false;
+    googleUi.error = "";
+    return refreshGoogle();
+  }
+
+  function handleGoogleScan() {
+    return googleAction(() => apiRequest("/api/google/gmail/scan", "POST", {}), "The scan could not start. Try again.");
+  }
+
+  function handleGoogleCancelScan() {
+    googleUi.stopping = true;
+    renderGoogleCard();
+    return googleAction(() => apiRequest("/api/google/gmail/cancel", "POST", {}), "The scan could not be stopped. Try again.");
+  }
+
+  function handleGoogleDisconnect() {
+    return googleAction(() => apiRequest("/api/google/disconnect", "POST", {}), "Could not disconnect from Google. Try again.");
+  }
+
+  function handleGoogleDiscard() {
+    return googleAction(() => apiRequest("/api/google/pending/discard", "POST", {}), "Could not clear the list. Try again.");
+  }
+
+  function handleGoogleCommit() {
+    return googleAction(async () => {
+      const res = await apiRequest("/api/google/pending/commit", "POST", {});
+      if (res.state) applyState(res.state);
+      showToast("Samples imported", `${res.inserted} new samples added`, "success");
+    }, "Your samples could not be saved. Your list is still here; try again.");
+  }
+
+  async function handleGoogleChatFile(file) {
+    if (!file || googleUi.uploading) return;
+    if (file.size > GOOGLE_MAX_UPLOAD_BYTES) {
+      googleUi.error = "That file is larger than 200 MB.";
+      renderGoogleCard();
+      return;
+    }
+    googleUi.uploading = true;
+    renderGoogleCard();
+    try {
+      await googleAction(() => apiUpload("/api/google/chat/upload", file), "The chat export could not be read. Try again.");
+    } finally {
+      googleUi.uploading = false;
+      renderGoogleCard();
+    }
   }
 
   // =========================================================================
   // API Fetch Wrappers
   // =========================================================================
+  async function failFromResponse(response) {
+    let errDetail = response.statusText;
+    let plain = "";
+    try {
+      const errJson = await response.json();
+      if (errJson && errJson.error) {
+        errDetail = errJson.error;
+        plain = errJson.error;
+      }
+    } catch (_) {}
+    const error = new Error(`Server error (${response.status}): ${errDetail}`);
+    error.detail = plain;
+    return error;
+  }
+
+  // Sends a file as the raw request body (no JSON wrapping, no base64).
+  async function apiUpload(endpoint, file) {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/octet-stream" },
+      body: file,
+    });
+    if (!response.ok) throw await failFromResponse(response);
+    return await response.json();
+  }
+
   async function apiRequest(endpoint, method = "GET", body = null) {
     const options = {
       method,
@@ -364,14 +711,7 @@
       options.body = JSON.stringify(body);
     }
     const response = await fetch(endpoint, options);
-    if (!response.ok) {
-      let errDetail = response.statusText;
-      try {
-        const errJson = await response.json();
-        if (errJson && errJson.error) errDetail = errJson.error;
-      } catch (_) {}
-      throw new Error(`Server error (${response.status}): ${errDetail}`);
-    }
+    if (!response.ok) throw await failFromResponse(response);
     return await response.json();
   }
 
@@ -538,6 +878,9 @@
     renderHistoryAndPairs();
     renderPangramHistory();
     renderSettingsModal();
+    renderGoogleSettings();
+    appState.sampleWords = data.sample_words ?? appState.sampleWords;
+    renderGoogleCard();
     updateInspectorEngineUI();
   }
 
@@ -1550,7 +1893,7 @@
 
   function closeSettingsModal() {
     if (dom.settingsModalBackdrop) dom.settingsModalBackdrop.style.display = "none";
-    appState.clearKeyFlags = { gemini: false, openai: false, anthropic: false, pangram: false, openrouter: false, typesafe: false };
+    appState.clearKeyFlags = { gemini: false, openai: false, anthropic: false, pangram: false, openrouter: false, typesafe: false, google: false };
   }
 
   async function handleSaveSettings(e) {
@@ -1594,11 +1937,18 @@
     if (typesafeKey) payload.typesafe_api_key = typesafeKey;
     if (appState.clearKeyFlags.typesafe) payload.clear_typesafe_api_key = true;
 
+    payload.google_client_id = dom.settingGoogleClientId?.value || "";
+    payload.google_extra_addresses = dom.settingGoogleExtra?.value || "";
+    const googleSecret = dom.settingGoogleSecret?.value || "";
+    if (googleSecret) payload.google_client_secret = googleSecret;
+    if (appState.clearKeyFlags.google) payload.clear_google_client_secret = true;
+
     try {
       const res = await apiRequest("/api/settings", "POST", payload);
       applyState(res.state);
       closeSettingsModal();
       showToast("Settings Saved", "AI Engine configuration updated", "success");
+      refreshGoogle();
     } catch (err) {
       showToast("Save Settings Failed", err.message, "error");
     }
@@ -3061,6 +3411,29 @@
       if (dom.settingTypesafeKey) dom.settingTypesafeKey.value = "";
     });
 
+    // Google sign-in
+    dom.btnClearGoogleSecret?.addEventListener("click", () => {
+      appState.clearKeyFlags.google = true;
+      if (dom.badgeGoogle) {
+        dom.badgeGoogle.textContent = "Will be cleared on save";
+        dom.badgeGoogle.className = "provider-status-badge badge-unconfigured";
+      }
+      if (dom.settingGoogleSecret) dom.settingGoogleSecret.value = "";
+    });
+    document.getElementById("btn-google-open-settings")?.addEventListener("click", openSettingsModal);
+    document.getElementById("btn-google-connect")?.addEventListener("click", handleGoogleConnect);
+    document.getElementById("btn-google-wait-cancel")?.addEventListener("click", handleGoogleWaitCancel);
+    document.getElementById("btn-google-cancel")?.addEventListener("click", handleGoogleCancelScan);
+    document.getElementById("btn-google-scan")?.addEventListener("click", handleGoogleScan);
+    document.getElementById("btn-google-disconnect")?.addEventListener("click", handleGoogleDisconnect);
+    document.getElementById("btn-google-discard")?.addEventListener("click", handleGoogleDiscard);
+    document.getElementById("btn-google-commit")?.addEventListener("click", handleGoogleCommit);
+    document.getElementById("btn-google-chat")?.addEventListener("click", () => dom.gChatFile?.click());
+    dom.gChatFile?.addEventListener("change", async (e) => {
+      await handleGoogleChatFile(e.target.files && e.target.files[0]);
+      e.target.value = "";
+    });
+
     // Inspector Tab Listeners
     dom.inspectorEngineSelect?.addEventListener("change", async (e) => {
       appState.inspectorEngine = e.target.value;
@@ -3247,6 +3620,7 @@
     try {
       const state = await apiRequest("/api/state");
       applyState(state);
+      refreshGoogle();
       setTimeout(() => checkForUpdates(true), 1500);
     } catch (err) {
       console.error("Failed to load initial state:", err);

@@ -38,7 +38,16 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "openrouter_rewrite_model": "google/gemini-2.5-flash",
     "ai_detect_regen_models": "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash",
     "ai_detect_arbiter_model": "google/gemini-2.5-flash",
+    "google_client_id": "",
+    "google_client_secret": "",
+    "google_account_email": "",
+    "google_extra_addresses": "",
 }
+
+
+def is_secret_setting(key: str) -> bool:
+    """True for settings that must never be echoed back to the browser."""
+    return key.endswith("_api_key") or key == "google_client_secret"
 
 
 def get_db_path() -> Path:
@@ -152,6 +161,13 @@ def init_db(db_path: Path | None = None) -> None:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS imported_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                UNIQUE(source, external_id)
+            );
+
             CREATE TABLE IF NOT EXISTS ai_detector_cache (
                 cache_key TEXT PRIMARY KEY,
                 result_json TEXT NOT NULL,
@@ -159,6 +175,9 @@ def init_db(db_path: Path | None = None) -> None:
             );
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(imported_messages)").fetchall()}
+        if "kind" not in columns:
+            conn.execute("ALTER TABLE imported_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'kept'")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
@@ -183,7 +202,7 @@ def get_public_settings(db_path: Path | None = None) -> dict[str, Any]:
     raw = get_settings(db_path)
     public: dict[str, Any] = {}
     for k, v in raw.items():
-        if k.endswith("_api_key"):
+        if is_secret_setting(k):
             public[k] = ""
             public[f"{k}_configured"] = bool(v.strip())
             public[f"{k}_preview"] = (f"{v[:4]}...{v[-4:]}" if len(v) >= 10 else ("••••" if v else ""))
@@ -201,7 +220,7 @@ def update_settings(updates: dict[str, Any], db_path: Path | None = None) -> dic
                 continue
             str_val = "" if value is None else str(value).strip()
             # Keep existing API key if UI submitted empty string without explicit clear flag
-            if key.endswith("_api_key") and str_val == "" and not updates.get(f"clear_{key}"):
+            if is_secret_setting(key) and str_val == "" and not updates.get(f"clear_{key}"):
                 continue
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES (?, ?) "
@@ -275,6 +294,73 @@ def add_samples_bulk(
     return inserted
 
 
+def total_sample_words(db_path: Path | None = None) -> int:
+    """Total word count across every stored sample."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT COALESCE(SUM(word_count), 0) AS n FROM samples").fetchone()
+    return int(row["n"])
+
+
+def get_imported_ids(source: str, db_path: Path | None = None) -> set[str]:
+    """External message ids already imported from a source (e.g. 'gmail')."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        rows = conn.execute("SELECT external_id FROM imported_messages WHERE source = ?", (source,)).fetchall()
+    return {r["external_id"] for r in rows}
+
+
+def record_imported_ids(source: str, ids: list[str], db_path: Path | None = None, kind: str = "kept") -> None:
+    """Remember imported message ids so a later scan skips them."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO imported_messages (source, external_id, kind) VALUES (?, ?, ?)",
+            [(source, i, kind) for i in ids],
+        )
+
+
+def get_sample_contents(db_path: Path | None = None) -> list[str]:
+    """Only the text of every stored sample (used for duplicate checks), never the whole rows."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        return [row["content"] for row in conn.execute("SELECT content FROM samples").fetchall()]
+
+
+def commit_import_batch(
+    items: list[str],
+    imported: list[tuple[str, str, str]],
+    context_mode: str,
+    source_type: str,
+    weight: float = 1.0,
+    db_path: Path | None = None,
+) -> int:
+    """Insert samples and record message ids in ONE transaction. Raises (and writes nothing) on any failure."""
+    init_db(db_path)
+    now = utc_now()
+    with get_connection(db_path) as conn:
+        existing = {
+            row["content"].strip()
+            for row in conn.execute("SELECT content FROM samples WHERE context_mode = ?", (context_mode,)).fetchall()
+        }
+        rows = []
+        for item in items:
+            cleaned = item.strip()
+            if not cleaned or cleaned in existing:
+                continue
+            existing.add(cleaned)
+            rows.append((context_mode, source_type, cleaned, len(cleaned.split()), float(weight), now))
+        conn.executemany(
+            "INSERT INTO samples (context_mode, source_type, content, word_count, weight, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.executemany(
+            "INSERT OR IGNORE INTO imported_messages (source, external_id, kind) VALUES (?, ?, ?)",
+            imported,
+        )
+    return len(rows)
+
+
 def get_samples(
     context_mode: str | None = None,
     limit: int = 500,
@@ -306,15 +392,25 @@ def delete_sample(sample_id: int, db_path: Path | None = None) -> bool:
 
 
 def clear_samples(context_mode: str | None = None, db_path: Path | None = None) -> int:
-    """Delete all samples (or only those for a specific context_mode)."""
+    """Delete all samples (or only those for a specific context_mode).
+
+    The remembered message ids of every source whose samples were removed are forgotten too,
+    so that mail or chats can be imported again. Deleting a single sample leaves them alone.
+    """
     init_db(db_path)
     with get_connection(db_path) as conn:
         if context_mode:
+            sources = [r["source_type"] for r in conn.execute("SELECT DISTINCT source_type FROM samples WHERE context_mode = ?", (context_mode,))]
             cur = conn.execute("DELETE FROM samples WHERE context_mode = ?", (context_mode,))
         else:
+            sources = None
             cur = conn.execute("DELETE FROM samples")
-        conn.commit()
-        return cur.rowcount
+        removed = cur.rowcount
+        if sources is None:
+            conn.execute("DELETE FROM imported_messages")
+        elif sources:
+            conn.executemany("DELETE FROM imported_messages WHERE source = ?", [(s,) for s in sources])
+        return removed
 
 
 def upsert_learned_replacement(
