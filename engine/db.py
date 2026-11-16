@@ -38,7 +38,16 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "openrouter_rewrite_model": "google/gemini-2.5-flash",
     "ai_detect_regen_models": "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash",
     "ai_detect_arbiter_model": "google/gemini-2.5-flash",
+    "google_client_id": "",
+    "google_client_secret": "",
+    "google_account_email": "",
+    "google_extra_addresses": "",
 }
+
+
+def is_secret_setting(key: str) -> bool:
+    """True for settings that must never be echoed back to the browser."""
+    return key.endswith("_api_key") or key == "google_client_secret"
 
 
 def get_db_path() -> Path:
@@ -152,6 +161,13 @@ def init_db(db_path: Path | None = None) -> None:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS imported_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                UNIQUE(source, external_id)
+            );
+
             CREATE TABLE IF NOT EXISTS ai_detector_cache (
                 cache_key TEXT PRIMARY KEY,
                 result_json TEXT NOT NULL,
@@ -183,7 +199,7 @@ def get_public_settings(db_path: Path | None = None) -> dict[str, Any]:
     raw = get_settings(db_path)
     public: dict[str, Any] = {}
     for k, v in raw.items():
-        if k.endswith("_api_key"):
+        if is_secret_setting(k):
             public[k] = ""
             public[f"{k}_configured"] = bool(v.strip())
             public[f"{k}_preview"] = (f"{v[:4]}...{v[-4:]}" if len(v) >= 10 else ("••••" if v else ""))
@@ -201,7 +217,7 @@ def update_settings(updates: dict[str, Any], db_path: Path | None = None) -> dic
                 continue
             str_val = "" if value is None else str(value).strip()
             # Keep existing API key if UI submitted empty string without explicit clear flag
-            if key.endswith("_api_key") and str_val == "" and not updates.get(f"clear_{key}"):
+            if is_secret_setting(key) and str_val == "" and not updates.get(f"clear_{key}"):
                 continue
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES (?, ?) "
@@ -273,6 +289,33 @@ def add_samples_bulk(
             inserted = len(rows_to_insert)
         conn.commit()
     return inserted
+
+
+def total_sample_words(db_path: Path | None = None) -> int:
+    """Total word count across every stored sample."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT COALESCE(SUM(word_count), 0) AS n FROM samples").fetchone()
+    return int(row["n"])
+
+
+def get_imported_ids(source: str, db_path: Path | None = None) -> set[str]:
+    """External message ids already imported from a source (e.g. 'gmail')."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        rows = conn.execute("SELECT external_id FROM imported_messages WHERE source = ?", (source,)).fetchall()
+    return {r["external_id"] for r in rows}
+
+
+def record_imported_ids(source: str, ids: list[str], db_path: Path | None = None) -> None:
+    """Remember imported message ids so a later scan skips them."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO imported_messages (source, external_id) VALUES (?, ?)",
+            [(source, i) for i in ids],
+        )
+        conn.commit()
 
 
 def get_samples(
