@@ -136,6 +136,8 @@
     dom.compHumanBefore = document.getElementById("comp-human-before");
     dom.compHumanAfter = document.getElementById("comp-human-after");
     dom.compHumanDelta = document.getElementById("comp-human-delta");
+    dom.hiddenCharsLine = document.getElementById("hidden-chars-line");
+    dom.pangramAgreementLine = document.getElementById("pangram-agreement-line");
     dom.compBurstBefore = document.getElementById("comp-burst-before");
     dom.compBurstAfter = document.getElementById("comp-burst-after");
     dom.compBurstDelta = document.getElementById("comp-burst-delta");
@@ -495,6 +497,7 @@
   // =========================================================================
   function applyState(data) {
     if (!data) return;
+    if (data.pangram_agreement) renderPangramAgreement(data.pangram_agreement);
     if (data.app_version) {
       appState.appVersion = data.app_version;
       if (dom.updateBtnLabel && !appState.latestUpdateInfo?.update_available) {
@@ -642,8 +645,28 @@
     }
   }
 
+  function renderPangramAgreement(a) {
+    if (!dom.pangramAgreementLine) return;
+    const n = a && a.scans ? a.scans : 0;
+    dom.pangramAgreementLine.style.display = n ? "" : "none";
+    if (n) dom.pangramAgreementLine.textContent = `Agrees with Pangram on ${a.agree} of ${n} of your scans`;
+  }
+
+  function renderHiddenChars(result) {
+    if (!dom.hiddenCharsLine) return;
+    const hc = result.hidden_characters;
+    if (!hc) {
+      dom.hiddenCharsLine.style.display = "none";
+      return;
+    }
+    const n = (hc.removed || 0) + (hc.replaced || 0);
+    dom.hiddenCharsLine.textContent = n ? `Hidden characters: ${n} removed` : "Hidden characters: none";
+    dom.hiddenCharsLine.style.display = "";
+  }
+
   function renderOutputComparison(result) {
     if (!result) return;
+    renderHiddenChars(result);
     const before = result.before || {};
     const after = result.after || {};
 
