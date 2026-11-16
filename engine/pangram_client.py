@@ -21,6 +21,17 @@ PANGRAM_PLAGIARISM_BASE = "https://plagiarism.api.pangram.com"
 
 COST_PER_100_WORDS_USD = 0.05
 
+PANGRAM_PASS_MAX_AI = 0.20
+PANGRAM_PASS_MAX_HUMANIZER = 0.50
+
+
+def passes_pangram(result: dict[str, Any]) -> bool:
+    """True when a Pangram result reads as human: AI fraction <= 20% and humanizer score < 50%."""
+    return (
+        float(result.get("fraction_ai") or 0.0) <= PANGRAM_PASS_MAX_AI
+        and float(result.get("max_humanizer_score") or 0.0) < PANGRAM_PASS_MAX_HUMANIZER
+    )
+
 
 class PangramError(Exception):
     """Structured error raised for Pangram API failures or validation errors."""

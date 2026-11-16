@@ -63,6 +63,7 @@ from engine.analyzer import (
 from engine.db import (
     add_sample,
     clear_samples,
+    add_rewrite_history,
     get_connection,
     get_jev_estimate,
     get_learned_replacements,
@@ -72,6 +73,7 @@ from engine.db import (
     get_samples,
     get_settings,
     init_db,
+    persist_pangram_result,
     save_jev_estimate,
     seed_demo_samples,
     update_settings,
@@ -85,6 +87,7 @@ from engine.pangram_client import (
     PangramError,
     estimate_pangram_cost,
     extract_docx_text,
+    passes_pangram,
     scan_file_pangram,
     scan_text_pangram,
 )
@@ -93,6 +96,7 @@ from engine.ai_detector.agreement import pangram_agreement
 from engine.rewriter import (
     apply_deterministic_de_ai,
     rewrite_text,
+    rewrite_with_model,
 )
 from engine.sanitize import strip_hidden_characters
 from engine.style_dna import extract_voice_dna, learn_from_user_edit
@@ -1693,6 +1697,172 @@ class TestJev(BaseEngineTestCase):
         with patch.object(jev_client, "_post_json") as post, contextlib.redirect_stdout(io.StringIO()):
             calibrate_jev.main(["--db", str(self.db_path), "--run"])
         post.assert_not_called()  # cached
+
+
+DRAFT_TEXT = (
+    "SYNTHETIC-DRAFT-MARKER we shipped the new billing page on Tuesday and a few people "
+    "hit a bug with coupons, so I patched it this morning and checked the invoices again."
+)
+
+
+def _fake_scan(text: str, ai: float = 0.05, hum: float = 0.0) -> dict[str, Any]:
+    return {
+        "scan_type": "text",
+        "text": text,
+        "headline": "stub",
+        "fraction_ai": ai,
+        "fraction_ai_assisted": 0.0,
+        "fraction_human": 1.0 - ai,
+        "max_humanizer_score": hum,
+        "dashboard_link": "",
+        "estimate": {"word_count": len(text.split()), "estimated_cost_usd": 0.01},
+    }
+
+
+class TestPassesPangram(unittest.TestCase):
+    def test_boundaries(self) -> None:
+        self.assertTrue(passes_pangram({"fraction_ai": 0.20, "max_humanizer_score": 0.49}))
+        self.assertFalse(passes_pangram({"fraction_ai": 0.21, "max_humanizer_score": 0.0}))
+        self.assertFalse(passes_pangram({"fraction_ai": 0.0, "max_humanizer_score": 0.50}))
+        self.assertTrue(passes_pangram({"fraction_ai": 0.0, "max_humanizer_score": 0.0}))
+
+
+class TestTryModels(BaseEngineTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        import try_models
+
+        self.tm = try_models
+        self.out_dir = Path(self.temp_dir) / "experiments"
+        add_rewrite_history("casual_chat", DRAFT_TEXT, "out", 40, 60, "none", db_path=self.db_path)
+        self._env = patch.dict(os.environ, {"OPENROUTER_API_KEY": "", "PANGRAM_API_KEY": ""})
+        self._env.start()
+
+    def tearDown(self) -> None:
+        self._env.stop()
+        super().tearDown()
+
+    def _run(self, *args: str) -> tuple[int, str]:
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            code = self.tm.main(["--db", str(self.db_path), "--out-dir", str(self.out_dir), *args])
+        return code, buf.getvalue()
+
+    def _keys(self, openrouter: bool = True, pangram: bool = True) -> None:
+        upd = {}
+        if openrouter:
+            upd["openrouter_api_key"] = "sk-or-SECRETKEY"
+        if pangram:
+            upd["pangram_api_key"] = "pg-SECRETKEY"
+        update_settings(upd, db_path=self.db_path)
+
+    def test_rewrite_with_model_forces_model_and_provider(self) -> None:
+        with patch("engine.rewriter._call_llm_provider", return_value=("we fixed the coupon bug today", "openrouter (x)")) as call:
+            res = rewrite_with_model(DRAFT_TEXT, "acme/model-1", db_path=self.db_path)
+        args = call.call_args.args
+        self.assertEqual(args[0], "openrouter")
+        self.assertEqual(args[1]["openrouter_rewrite_model"], "acme/model-1")
+        self.assertEqual(res["model"], "acme/model-1")
+        self.assertTrue(res["rewritten"])
+        self.assertEqual(res["provider_used"], "openrouter (x)")
+        self.assertIn("removed", res["hidden_characters"])
+        self.assertIsInstance(res["inhouse_human_score"], int)
+        self.assertEqual(len(get_rewrite_history(db_path=self.db_path)), 1)  # only the seeded row
+
+    def test_rewrite_with_model_no_response(self) -> None:
+        with patch("engine.rewriter._call_llm_provider", return_value=(None, "none")):
+            res = rewrite_with_model(DRAFT_TEXT, "acme/model-1", db_path=self.db_path)
+        self.assertEqual(res, {"model": "acme/model-1", "rewritten": "", "error": "no response"})
+
+    def test_dry_run_makes_no_calls_and_prints_no_secrets(self) -> None:
+        self._keys()
+        with patch("engine.rewriter._call_llm_provider") as llm, patch.object(self.tm, "scan_text_pangram") as pg:
+            code, out = self._run()
+        self.assertEqual(code, 0)
+        llm.assert_not_called()
+        pg.assert_not_called()
+        self.assertNotIn("SYNTHETIC-DRAFT-MARKER", out)
+        self.assertNotIn("SECRETKEY", out)
+        self.assertIn("DRY RUN", out)
+        self.assertIn("Model calls: 3", out)
+        self.assertIn("OpenRouter key configured: yes", out)
+        self.assertFalse(self.out_dir.exists())
+
+    def test_short_or_missing_draft_exits_1(self) -> None:
+        short = Path(self.temp_dir) / "short.txt"
+        short.write_text("too short", encoding="utf-8")
+        code, out = self._run("--file", str(short))
+        self.assertEqual(code, 1)
+        self.assertIn("too short", out)
+        other = Path(self.temp_dir) / "empty.db"
+        init_db(other)
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            self.assertEqual(self.tm.main(["--db", str(other)]), 1)
+
+    def test_run_calls_provider_per_model_without_pangram(self) -> None:
+        self._keys(pangram=False)
+        with patch("engine.rewriter._call_llm_provider", return_value=("we fixed the coupon bug today and rechecked", "openrouter")) as llm, \
+                patch.object(self.tm, "scan_text_pangram") as pg:
+            code, out = self._run("--run", "--models", "a/one,b/two")
+        self.assertEqual(code, 0)
+        self.assertEqual(llm.call_count, 2)
+        self.assertEqual([c.args[1]["openrouter_rewrite_model"] for c in llm.call_args_list], ["a/one", "b/two"])
+        pg.assert_not_called()
+        self.assertIn("No Pangram scan was run", out)
+        files = list(self.out_dir.glob("*.json"))
+        self.assertEqual(len(files), 1)
+        data = json.loads(files[0].read_text(encoding="utf-8"))
+        self.assertNotIn("SYNTHETIC-DRAFT-MARKER", json.dumps(data))
+        self.assertEqual(len(data["results"]), 2)
+
+    def test_scan_stores_rows_and_prints_pass_fail(self) -> None:
+        self._keys()
+        scans = iter([_fake_scan("one", ai=0.05), _fake_scan("two", ai=0.9)])
+        with patch("engine.rewriter._call_llm_provider", return_value=("we fixed the coupon bug today and rechecked", "openrouter")), \
+                patch.object(self.tm, "scan_text_pangram", side_effect=lambda *a, **k: next(scans)) as pg:
+            code, out = self._run("--scan", "--models", "a/one,b/two")
+        self.assertEqual(code, 0)
+        self.assertEqual(pg.call_count, 2)
+        self.assertIn("PASS", out)
+        self.assertIn("FAIL", out)
+        self.assertIn("1 of 2 rewrites passed Pangram (AI <= 20%, humanizer < 50%)", out)
+        titles = [s["title"] for s in get_pangram_scans(db_path=self.db_path)]
+        self.assertCountEqual(titles, ["experiment: a/one", "experiment: b/two"])
+
+    def test_one_model_failing_does_not_stop_others(self) -> None:
+        self._keys()
+        replies = [(None, "none"), ("we fixed the coupon bug today and rechecked", "openrouter")]
+        with patch("engine.rewriter._call_llm_provider", side_effect=replies), \
+                patch.object(self.tm, "scan_text_pangram", return_value=_fake_scan("x")) as pg:
+            code, out = self._run("--scan", "--models", "bad/one,good/two")
+        self.assertEqual(code, 0)
+        self.assertEqual(pg.call_count, 1)
+        self.assertIn("ERROR: no response", out)
+        self.assertIn("1 of 2 rewrites passed", out)
+
+    def test_pangram_error_shown_and_run_continues(self) -> None:
+        self._keys()
+        with patch("engine.rewriter._call_llm_provider", return_value=("we fixed the coupon bug today and rechecked", "openrouter")), \
+                patch.object(self.tm, "scan_text_pangram", side_effect=[PangramError("boom", 502), _fake_scan("x")]):
+            code, out = self._run("--scan", "--models", "a/one,b/two")
+        self.assertEqual(code, 0)
+        self.assertIn("Pangram error: boom", out)
+        self.assertIn("1 of 2 rewrites passed", out)
+
+    def test_missing_keys_exit_before_any_call(self) -> None:
+        with patch("engine.rewriter._call_llm_provider") as llm, patch.object(self.tm, "scan_text_pangram") as pg:
+            code, out = self._run("--run")
+            self.assertEqual(code, 1)
+            self.assertIn("OpenRouter", out)
+            self._keys(pangram=False)
+            code, out = self._run("--scan")
+            self.assertEqual(code, 1)
+            self.assertIn("Pangram", out)
+        llm.assert_not_called()
+        pg.assert_not_called()
+        self.assertFalse(self.out_dir.exists())
 
 
 if __name__ == "__main__":
