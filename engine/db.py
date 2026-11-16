@@ -32,6 +32,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "inspector_engine": "inhouse",
     "openrouter_api_key": "",
     "openrouter_base_url": "https://openrouter.ai/api/v1",
+    "openrouter_rewrite_model": "google/gemini-2.5-flash",
     "ai_detect_regen_models": "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash",
     "ai_detect_arbiter_model": "google/gemini-2.5-flash",
 }

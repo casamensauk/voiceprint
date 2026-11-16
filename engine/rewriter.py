@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.error
 import urllib.request
@@ -94,6 +95,35 @@ def _check_ollama_ready(ollama_url: str) -> bool:
         return False
 
 
+def resolve_voice_corpus(
+    mode: str,
+    db_path: Path | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return active samples, rules, and edit pairs with cross-mode fallback if <3 samples in mode."""
+    mode_samples = get_samples(context_mode=mode, db_path=db_path)
+    if len(mode_samples) < 3:
+        all_samples = get_samples(context_mode=None, db_path=db_path)
+        seen_ids = {s.get("id") for s in mode_samples if s.get("id") is not None}
+        for s in all_samples:
+            if s.get("id") in seen_ids:
+                continue
+            cross = dict(s)
+            cross["weight"] = round(float(s.get("weight", 1.0)) * 0.85, 3)
+            mode_samples.append(cross)
+            if s.get("id") is not None:
+                seen_ids.add(s.get("id"))
+
+    mode_rules = get_learned_replacements(context_mode=mode, db_path=db_path)
+    if not mode_rules:
+        mode_rules = get_learned_replacements(context_mode=None, db_path=db_path)
+
+    mode_edits = get_edit_pairs(context_mode=mode, limit=5, db_path=db_path)
+    if not mode_edits:
+        mode_edits = get_edit_pairs(context_mode=None, limit=5, db_path=db_path)
+
+    return mode_samples, mode_rules, mode_edits
+
+
 def _build_llm_prompts(
     text: str,
     context_mode: str,
@@ -114,8 +144,8 @@ def _build_llm_prompts(
 
     samples_block = ""
     if top_samples:
-        formatted = "\n---\n".join(s["content"].strip() for s in top_samples[:5])
-        samples_block = f"\nAUTHENTIC WRITING SAMPLES FROM THIS USER ({context_mode}):\n{formatted}"
+        formatted = "\n---\n".join(s["content"].strip()[:400] for s in top_samples[:6])
+        samples_block = f"\nAUTHENTIC WRITING SAMPLES FROM THIS USER ({context_mode} & personal voice — mirror this exact tone and rhythm):\n{formatted}"
 
     edits_block = ""
     if edit_pairs:
@@ -126,21 +156,22 @@ def _build_llm_prompts(
         edits_block = f"\nPAST CORRECTIONS SHOWING HOW THIS USER TWEAKS DRAFTS:\n{pairs_txt}"
 
     system_prompt = (
-        f"You are VoicePrint, a ghostwriter that rewrites text so it sounds 100% written by the user "
-        f"in '{context_mode}' mode and leaves zero AI statistical fingerprints.\n\n"
+        f"You are VoicePrint, a ghostwriter that rewrites text so it sounds 100% written by the human author "
+        f"shown in their writing samples below, tailored for '{context_mode}' mode with zero AI statistical fingerprints.\n\n"
         f"RULES:\n"
-        f"1. Preserve the core facts and intent accurately, without inventing facts.\n"
-        f"2. Dismantle AI rhythm: vary sentence lengths dramatically (high burstiness — mix short 3-7 word lines with medium/longer ones).\n"
-        f"3. NEVER use AI clichés (delve, tapestry, testament, underscore, multifaceted, foster, realm, pivotal, crucial, intricate, meticulous, vibrant, landscape, embark, unleash, elevate, leverage, synergy, seamless, robust, comprehensive, transformative, moreover, furthermore, in conclusion, it's worth noting, at the end of the day).\n"
-        f"4. NEVER use Unicode em-dashes (—) or 'Not only X, but also Y' templates or '**Label**:' bullet formatting.\n"
-        f"5. Rewrite intensity: {intensity}.\n"
-        f"6. VOICE DNA TARGETS:\n{directives}"
+        f"1. Preserve the core facts and meaning accurately, without inventing facts or adding fluff.\n"
+        f"2. Break AI cadence completely: mix at least one crisp 4-9 word sentence with longer natural ones, and vary how sentences start.\n"
+        f"3. Write directly like a real person talking/writing (use contractions naturally like it's, don't, you'll, can't matching Voice DNA). NEVER leave encyclopedic textbook templates like '[X] gives/allows businesses a dedicated... so customers can...' intact.\n"
+        f"4. NEVER use parallel 3-or-4-item Oxford-comma lists ('a, b, c, and d'), RLHF framing ('Instead of...', 'By ...ing,', 'At its core,', 'Ultimately,'), 'Heading: Explanation' colons, Unicode em-dashes (—), 'Not only ... but also', or '**Label**:' bullets.\n"
+        f"5. NEVER use AI clichés (delve, tapestry, testament, underscore, multifaceted, foster, realm, pivotal, crucial, intricate, meticulous, vibrant, landscape, embark, unleash, elevate, leverage, synergy, seamless, robust, comprehensive, transformative, moreover, furthermore, in conclusion, it's worth noting, at the end of the day).\n"
+        f"6. Rewrite intensity: {intensity}.\n"
+        f"7. VOICE DNA TARGETS:\n{directives}"
         f"{rules_block}"
         f"{samples_block}"
         f"{edits_block}\n\n"
         f"Return ONLY the rewritten text — no preamble, no quotes, no explanation."
     )
-    user_prompt = f"Rewrite this text in my exact voice:\n\n{text}"
+    user_prompt = f"Rewrite this text so it genuinely sounds like me:\n\n{text}"
     return system_prompt, user_prompt
 
 
@@ -151,8 +182,11 @@ def _call_llm_provider(
     user_prompt: str,
 ) -> tuple[str | None, str]:
     """Attempt rewrite via configured LLM provider; return (text_or_none, provider_label)."""
+    openrouter_key = (settings.get("openrouter_api_key") or os.environ.get("OPENROUTER_API_KEY") or "").strip()
     candidates: list[str] = []
     if provider_choice == "auto":
+        if openrouter_key:
+            candidates.append("openrouter")
         if settings.get("gemini_api_key"):
             candidates.append("gemini")
         if settings.get("openai_api_key"):
@@ -166,7 +200,38 @@ def _call_llm_provider(
 
     for prov in candidates:
         try:
-            if prov == "gemini" and settings.get("gemini_api_key"):
+            if prov == "openrouter" and openrouter_key:
+                base_url = (
+                    settings.get("openrouter_base_url")
+                    or os.environ.get("OPENROUTER_BASE_URL")
+                    or "https://openrouter.ai/api/v1"
+                ).rstrip("/")
+                model = (
+                    settings.get("openrouter_rewrite_model")
+                    or settings.get("ai_detect_arbiter_model")
+                    or "google/gemini-2.5-flash"
+                ).strip()
+                res = _post_json(
+                    f"{base_url}/chat/completions",
+                    {
+                        "model": model,
+                        "temperature": 0.88,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    },
+                    headers={
+                        "Authorization": f"Bearer {openrouter_key}",
+                        "HTTP-Referer": "http://127.0.0.1:18940",
+                        "X-Title": "VoicePrint",
+                    },
+                )
+                txt = res["choices"][0]["message"]["content"].strip()
+                if txt:
+                    return txt, f"openrouter ({model})"
+
+            elif prov == "gemini" and settings.get("gemini_api_key"):
                 model = settings.get("gemini_model") or "gemini-2.5-flash"
                 key = settings["gemini_api_key"]
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
@@ -277,7 +342,7 @@ def _replace_not_only(text: str) -> str:
     return pattern.sub(lambda m: f"{m.group(1).strip()} and {m.group(2).strip()}", text)
 
 
-def _modulate_burstiness(text: str, target_avg: float, intensity: str) -> str:
+def _modulate_burstiness(text: str, target_avg: float, intensity: str, from_llm: bool = False) -> str:
     """Break up uniform AI sentence rhythm by splitting long compound clauses into natural bursts."""
     if intensity == "subtle":
         return text
@@ -289,8 +354,11 @@ def _modulate_burstiness(text: str, target_avg: float, intensity: str) -> str:
         if not para.strip():
             out_paragraphs.append(para)
             continue
-        sents = split_sentences(para)
         burst = compute_burstiness(para)
+        if from_llm and burst["coeff_of_variation"] >= 0.30:
+            out_paragraphs.append(para)
+            continue
+        sents = split_sentences(para)
         needs_variation = len(sents) >= 2 and (
             burst["coeff_of_variation"] < 0.35 or max(len(s.split()) for s in sents) >= 22
         )
@@ -303,10 +371,27 @@ def _modulate_burstiness(text: str, target_avg: float, intensity: str) -> str:
                 or (target_avg <= 11.5 and len(words) >= 15)
             )
             if should_split:
-                # Split cleanly on ", and ", ", while ", ", which ", "; ", or ", " when bursting uniform prose
-                split_match = re.search(r"(?:,\s+(?:and|while|which|whereas|so)\s+|;\s+)", sent)
-                if not split_match and needs_variation and len(words) >= 12:
-                    split_match = re.search(r",\s+(?=[a-zA-Z])", sent)
+                # Split only on safe clause boundaries (never mid-enumeration noun lists)
+                split_match = re.search(
+                    r"(?:"
+                    r";\s+"
+                    r"|,\s+(?:while|whereas|though|although)\s+"
+                    r"|,\s+which\s+(?=(?:gives|makes|lets|helps|means|allows|keeps|turns|shows|is|was|can|will)\b)"
+                    r"|,\s+and\s+(?=(?:it|they|you|we|this|that|there)\s+(?:can|will|also|get|have|use|need|don't|won't|are|is)\b)"
+                    r")",
+                    sent,
+                    re.IGNORECASE,
+                )
+                is_so_purpose = False
+                if not split_match and len(words) >= 22:
+                    split_match = re.search(
+                        r"\s+so\s+(?=(?:customers|users|people|you|we|they|teams|businesses|anyone)\s+(?:can|will|don't|won't|get|find|know|see)\b)",
+                        sent,
+                        re.IGNORECASE,
+                    )
+                    if split_match:
+                        is_so_purpose = True
+
                 if split_match and split_match.start() >= 14 and len(sent) - split_match.end() >= 12:
                     left = sent[: split_match.start()].strip().rstrip(",;")
                     right = sent[split_match.end() :].strip()
@@ -314,6 +399,8 @@ def _modulate_burstiness(text: str, target_avg: float, intensity: str) -> str:
                     if not right.lower().startswith("to ") and len(left.split()) >= 3 and len(right.split()) >= 4:
                         if conj == "which":
                             right = f"That {right}"
+                        elif is_so_purpose:
+                            right = f"That way {right}"
                         else:
                             right = right[:1].upper() + right[1:] if right else right
                         if left and not left.endswith((".", "!", "?")):
@@ -414,6 +501,7 @@ def apply_deterministic_de_ai(
     dna: dict[str, Any],
     learned_replacements: list[dict[str, Any]],
     intensity: str = "deep",
+    from_llm: bool = False,
 ) -> str:
     """Deterministic De-AI + Voice DNA pass (works standalone or after LLM generation)."""
     out = text.strip()
@@ -455,7 +543,7 @@ def apply_deterministic_de_ai(
     out = re.sub(r"\b(to)\s+to\b", r"\1", out, flags=re.IGNORECASE)
     out = re.sub(r"^(?:Plus|Also)\s+(?=[a-zA-Z])", "", out)
 
-    # 4. In casual_chat / social_post or deep mode, swap stiff formal connectors
+    # 4. In casual_chat / social_post or deep mode, swap stiff formal connectors & textbook framing
     if context_mode in ("casual_chat", "social_post") or intensity == "deep":
         for formal, natural in sorted(
             CASUAL_UPGRADES.items(), key=lambda kv: len(kv[0]), reverse=True
@@ -463,13 +551,54 @@ def apply_deterministic_de_ai(
             pat = re.compile(r"\b" + re.escape(formal) + r"\b", re.IGNORECASE)
             out = pat.sub(lambda m, n=natural: _match_case(n, m.group(0)), out)
 
+    if not from_llm and (context_mode in ("casual_chat", "social_post") or intensity in ("natural", "deep")):
+        is_casual = context_mode in ("casual_chat", "social_post")
+        out = re.sub(
+            r"\bwhich gives businesses a dedicated\b",
+            "that gives you a" if is_casual else "giving teams a",
+            out,
+            flags=re.IGNORECASE,
+        )
+        out = re.sub(
+            r"\bgives businesses a dedicated\b",
+            "gives you a" if is_casual else "gives teams a",
+            out,
+            flags=re.IGNORECASE,
+        )
+        out = re.sub(
+            r"\ballow businesses to\b",
+            "let you" if is_casual else "let teams",
+            out,
+            flags=re.IGNORECASE,
+        )
+        out = re.sub(
+            r"\ballows businesses to\b",
+            "lets you" if is_casual else "lets teams",
+            out,
+            flags=re.IGNORECASE,
+        )
+        if intensity == "deep" or is_casual:
+            out = re.sub(
+                r"\bso customers can find them easily\b",
+                "so people can find them easily",
+                out,
+                flags=re.IGNORECASE,
+            )
+
     # 5. Structural pattern removal
     out = _replace_not_only(out)
+    if intensity == "deep" and float(dna.get("oxford_comma_rate", 0.15)) < 0.40:
+        out = re.sub(
+            r",\s+(and|or)\s+(?!\s*(?:it|they|you|we|i|he|she|this|that|there)\b)",
+            r" \1 ",
+            out,
+            flags=re.IGNORECASE,
+        )
     out = re.sub(r"[ \t]{2,}", " ", out)
     out = re.sub(r"(?m)^\s*,\s*", "", out)
 
     # 6. Burstiness rhythm modulation
-    out = _modulate_burstiness(out, float(dna.get("avg_sentence_length", 12.0)), intensity)
+    out = _modulate_burstiness(out, float(dna.get("avg_sentence_length", 12.0)), intensity, from_llm=from_llm)
 
     # 7. Personal Voice DNA surface polish
     out = _apply_surface_dna(out, context_mode, dna, intensity)
@@ -489,9 +618,7 @@ def rewrite_text(
     mode = context_mode or settings.get("active_context_mode") or "casual_chat"
     eff_intensity = intensity or settings.get("intensity") or "deep"
 
-    samples = get_samples(context_mode=mode, db_path=db_path)
-    learned_rules = get_learned_replacements(context_mode=mode, db_path=db_path)
-    edit_pairs = get_edit_pairs(context_mode=mode, limit=5, db_path=db_path)
+    samples, learned_rules, edit_pairs = resolve_voice_corpus(mode, db_path=db_path)
 
     dna = extract_voice_dna(samples, learned_rules)
     before_analysis = analyze_text(cleaned, dna)
@@ -509,12 +636,13 @@ def rewrite_text(
             "samples_referenced": 0,
         }
 
-    top_samples = retrieve_similar_samples(cleaned, samples, top_k=5)
+    top_samples = retrieve_similar_samples(cleaned, samples, top_k=6)
     sys_prompt, usr_prompt = _build_llm_prompts(
         cleaned, mode, eff_intensity, dna, learned_rules, top_samples, edit_pairs
     )
+    provider_setting = settings.get("provider", "auto")
     llm_draft, provider_used = _call_llm_provider(
-        settings.get("provider", "auto"), settings, sys_prompt, usr_prompt
+        provider_setting, settings, sys_prompt, usr_prompt
     )
 
     base_text = llm_draft if llm_draft else cleaned
@@ -524,7 +652,37 @@ def rewrite_text(
         dna=dna,
         learned_replacements=learned_rules,
         intensity=eff_intensity,
+        from_llm=bool(llm_draft),
     )
+
+    # 1-pass Voice Fidelity self-check when LLM generated text
+    if llm_draft and len(rewritten.split()) >= 20:
+        from .ai_detector.stylometrics import score_window_stylometrics
+
+        stylo = score_window_stylometrics(rewritten)
+        if float(stylo["stylometric_ai_score"]) >= 0.35:
+            reasons_txt = "; ".join((stylo.get("reasons") or [])[:4])
+            critique_prompt = (
+                f"Revise your draft below so it sounds genuinely written by the human author in the samples — "
+                f"eliminate these remaining AI patterns: {reasons_txt}. "
+                f"Use natural contractions, mix a short 4-8 word sentence with longer conversational lines, and drop textbook 'allows businesses to' framing or 3-item Oxford lists. "
+                f"Keep the core facts accurate and return ONLY the revised text.\n\nDraft:\n{rewritten}"
+            )
+            refined_raw, refined_prov = _call_llm_provider(
+                provider_setting, settings, sys_prompt, critique_prompt
+            )
+            if refined_raw:
+                refined = apply_deterministic_de_ai(
+                    refined_raw,
+                    context_mode=mode,
+                    dna=dna,
+                    learned_replacements=learned_rules,
+                    intensity=eff_intensity,
+                    from_llm=True,
+                )
+                if float(score_window_stylometrics(refined)["stylometric_ai_score"]) < float(stylo["stylometric_ai_score"]):
+                    rewritten = refined
+                    provider_used = refined_prov
 
     after_analysis = analyze_text(rewritten, dna)
     if save_history:

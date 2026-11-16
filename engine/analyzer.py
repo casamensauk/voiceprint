@@ -231,7 +231,9 @@ def compute_contraction_stats(text: str) -> tuple[int, int, float]:
 
 def compute_burstiness(text: str) -> dict[str, Any]:
     """Measure sentence-length variation and map it to a 0-100 burstiness score."""
-    sentences = split_sentences(text)
+    from .ai_detector.preprocessor import split_sentences_recover_collapsed
+
+    sentences = split_sentences_recover_collapsed(text)
     lengths = [len(s.split()) for s in sentences if s.split()]
     if not lengths:
         return {
@@ -274,6 +276,8 @@ def compute_burstiness(text: str) -> dict[str, Any]:
     if min(lengths) <= 7 and max(lengths) >= 14:
         raw_score += 10.0
     if len(lengths) >= 3 and cv < 0.22:
+        raw_score -= 12.0
+    elif len(lengths) == 2 and sum(lengths) >= 40 and cv < 0.20:
         raw_score -= 12.0
     score = int(max(5, min(100, round(raw_score))))
     return {
@@ -417,8 +421,31 @@ def compute_style_alignment(text: str, target_dna: dict[str, Any] | None) -> int
     return int(max(10, min(100, round(score))))
 
 
+def _forensic_suggestion(reason: str) -> str:
+    low = reason.lower()
+    if "oxford-comma" in low:
+        return "break up 3+ item list"
+    if "encyclopedic" in low or "definition" in low:
+        return "say directly in your voice"
+    if "uniform sentence cadence" in low or "steady medium-long" in low or "inter-sentence length" in low:
+        return "mix short & longer lines"
+    if "frictionless declarative" in low or "zero contractions" in low:
+        return "add contractions or natural aside"
+    if "rlhf" in low:
+        return "simplify framing & tone"
+    if "explainer stock" in low or "makes [" in low or "evaluative" in low:
+        return "replace generic explainer phrasing"
+    if "taxonomy" in low or "imperative" in low or "anaphora" in low:
+        return "turn template items into natural prose"
+    if "nominalization" in low or "polysyllabic" in low:
+        return "prefer simpler everyday verbs"
+    if "homoglyph" in low or "unicode" in low:
+        return "strip invisible / spoofed chars"
+    return "rewrite in your natural cadence"
+
+
 def analyze_text(text: str, target_dna: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Run full AI-tell scan, statistical burstiness, and Voice DNA alignment."""
+    """Run unified Stage-1 forensics, AI-tell scan, burstiness, and Voice DNA alignment."""
     cleaned = text.strip()
     if not cleaned:
         return {
@@ -441,52 +468,89 @@ def analyze_text(text: str, target_dna: dict[str, Any] | None = None) -> dict[st
             },
         }
 
+    from .ai_detector.preprocessor import segment_document
+    from .ai_detector.stylometrics import score_window_stylometrics
+
     word_count = len(cleaned.split())
     burst = compute_burstiness(cleaned)
     tells = scan_ai_tells(cleaned)
     _, _, contraction_rate = compute_contraction_stats(cleaned)
     style_match = compute_style_alignment(cleaned, target_dna)
-
-    # 1. Absence of AI tells (0 - 100, 45% weight)
-    tell_penalty = (
-        tells["vocab_flag_count"] * 17.0
-        + tells["transition_flag_count"] * 15.0
-        + (16.0 if tells["em_dash_per_100"] > 1.0 else (8.0 if tells["em_dash_count"] > 0 else 0.0))
-        + tells["not_only_count"] * 12.0
-        + tells["colon_bullet_count"] * 12.0
-    )
-    ai_absence_score = max(0.0, 100.0 - tell_penalty)
-
-    # 2. Burstiness score (0 - 100, 30% weight)
     burstiness_score = float(burst["burstiness_score"])
 
-    # 3. Structural naturalness (0 - 100, 15% weight)
-    structural_score = 100.0
-    if burst["sentence_count"] >= 3 and burst["coeff_of_variation"] < 0.25:
-        structural_score -= 45.0
-    if tells["em_dash_per_100"] > 1.0:
-        structural_score -= 25.0
-    if tells["not_only_count"] > 0:
-        structural_score -= 25.0
-    if tells["colon_bullet_count"] > 0:
-        structural_score -= 25.0
-    if contraction_rate == 0.0 and word_count >= 25:
-        structural_score -= 15.0
-    structural_score = max(0.0, structural_score)
+    # Unified Stage-1 forensic evaluation (same engine used by AI & Originality Inspector)
+    segments = [s for s in segment_document(cleaned) if not s.is_excluded_reference]
+    if segments:
+        seg_scores: list[tuple[float, float, int]] = []
+        raw_reasons: list[str] = []
+        for seg in segments:
+            s_res = score_window_stylometrics(seg.text)
+            seg_w = max(1, seg.word_count)
+            seg_scores.append(
+                (float(s_res["stylometric_ai_score"]), float(s_res["stylometric_humanizer_score"]), seg_w)
+            )
+            raw_reasons.extend(s_res.get("reasons") or [])
+        total_w = float(sum(item[2] for item in seg_scores))
+        stylo_ai = sum(item[0] * item[2] for item in seg_scores) / total_w
+        stylo_hum = max(item[1] for item in seg_scores)
+    else:
+        s_res = score_window_stylometrics(cleaned)
+        stylo_ai = float(s_res["stylometric_ai_score"])
+        stylo_hum = float(s_res["stylometric_humanizer_score"])
+        raw_reasons = list(s_res.get("reasons") or [])
 
-    # Weighted blend
-    human_float = (
-        0.45 * ai_absence_score
-        + 0.30 * burstiness_score
-        + 0.15 * structural_score
-        + 0.10 * float(style_match)
-    )
-    # Strong cap if multiple AI vocabulary tells appear simultaneously
+    if word_count < 18 and tells["total_tell_instances"] == 0:
+        forensic_ai_risk = stylo_ai * 55.0
+    else:
+        forensic_ai_risk = stylo_ai * 100.0 + max(0.0, (stylo_hum - 0.35) * 40.0)
+        tell_floor = min(
+            95.0,
+            tells["vocab_flag_count"] * 15.0
+            + tells["transition_flag_count"] * 14.0
+            + (12.0 if tells["em_dash_count"] > 0 else 0.0)
+            + tells["not_only_count"] * 12.0
+            + tells["colon_bullet_count"] * 12.0,
+        )
+        forensic_ai_risk = max(forensic_ai_risk, tell_floor)
+
+    forensic_ai_risk = min(99.0, max(0.0, forensic_ai_risk))
+    forensic_human = 100.0 - forensic_ai_risk
+
+    # Blend gently with Voice DNA alignment while preventing style match from masking AI prose
+    human_float = 0.92 * forensic_human + 0.08 * float(style_match)
+    if forensic_ai_risk >= 55.0:
+        human_float = min(human_float, 102.0 - forensic_ai_risk)
     if tells["vocab_flag_count"] + tells["transition_flag_count"] >= 4:
         human_float = min(human_float, 38.0)
 
     human_score = int(max(1, min(100, round(human_float))))
     ai_risk_score = 100 - human_score
+
+    # Merge exact lexical/punctuation flags with non-benign forensic flags when risk is meaningful
+    flags: list[dict[str, str]] = list(tells["flags"])
+    if stylo_ai >= 0.38 or stylo_hum >= 0.50:
+        existing_low = {f["phrase"].lower() for f in flags}
+        forensic_added = 0
+        for reason in raw_reasons:
+            if reason.startswith(("Natural lexical", "Human sentence", "Empirical data")):
+                continue
+            if reason.startswith(("AI lexicon markers", "Formulaic transitions", "Unicode em-dash", "Correlative 'Not only")):
+                continue
+            short_title = reason.split(":", 1)[0].split(" (", 1)[0].strip()
+            if not short_title or short_title.lower() in existing_low:
+                continue
+            existing_low.add(short_title.lower())
+            flags.append(
+                {
+                    "phrase": short_title,
+                    "category": "forensic_pattern",
+                    "count": "1",
+                    "suggestion": _forensic_suggestion(reason),
+                }
+            )
+            forensic_added += 1
+            if forensic_added >= 6:
+                break
 
     return {
         "word_count": word_count,
@@ -496,7 +560,7 @@ def analyze_text(text: str, target_dna: dict[str, Any] | None = None) -> dict[st
         "burstiness_score": int(burstiness_score),
         "style_match_score": style_match,
         "sentence_lengths": burst["sentence_lengths"],
-        "flags": tells["flags"],
+        "flags": flags,
         "metrics": {
             "mean_sentence_len": burst["mean_sentence_len"],
             "stdev_sentence_len": burst["stdev_sentence_len"],

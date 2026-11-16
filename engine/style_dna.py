@@ -67,6 +67,8 @@ def extract_voice_dna(
             "lowercase_start_rate": 0.0,
             "lowercase_i_rate": 0.0,
             "no_trailing_period_rate": 0.0,
+            "oxford_comma_rate": 0.15,
+            "personal_pronoun_rate": 2.0,
             "punctuation_profile": {
                 "ellipsis": 0.0,
                 "double_dash": 0.0,
@@ -103,6 +105,9 @@ def extract_voice_dna(
     opener_counts: Counter[str] = Counter()
     slang_counts: Counter[str] = Counter()
     total_weight_words = 0.0
+    oxford_joins = 0.0
+    non_oxford_joins = 0.0
+    personal_pronouns = 0.0
 
     for sample in samples:
         text = sample["content"].strip()
@@ -157,12 +162,18 @@ def extract_voice_dna(
             if len(first_words) >= 2 and first_words[0] in {"quick", "no", "just", "hot", "short", "hey", "hi"}:
                 opener_counts[f"{first_words[0]} {first_words[1]}"] += w
 
-        # Slang / signature markers
+        # Slang / signature markers & list/pronoun voice habits
         lower_text = text.lower()
         for marker in SLANG_MARKERS:
             found = len(re.findall(r"\b" + re.escape(marker) + r"\b", lower_text))
             if found:
                 slang_counts[marker] += found * w
+
+        ox_cnt = len(re.findall(r",\s+(?:and|or)\s+", lower_text))
+        total_conj = len(re.findall(r"\b(?:and|or)\b", lower_text))
+        oxford_joins += ox_cnt * w
+        non_oxford_joins += max(0, total_conj - ox_cnt) * w
+        personal_pronouns += len(re.findall(r"\b(?:i|i'm|i've|i'd|i'll|me|my|we|we're|our|you|you're|you'll|your)\b", lower_text)) * w
 
     avg_sent_len = statistics.mean(weighted_sentence_lengths) if weighted_sentence_lengths else 12.0
     std_sent_len = (
@@ -181,6 +192,9 @@ def extract_voice_dna(
     no_trailing_period_rate = (no_period_w / short_sample_w) if short_sample_w > 0 else 0.0
 
     norm_denom = max(1.0, total_weight_words) / 100.0
+    oxford_total = oxford_joins + non_oxford_joins
+    oxford_comma_rate = (oxford_joins / oxford_total) if oxford_total > 0 else 0.15
+    personal_pronoun_rate = personal_pronouns / norm_denom
     punctuation_profile = {
         k: round(punct_counts[k] / norm_denom, 2)
         for k in ("ellipsis", "double_dash", "em_dash", "exclamation", "question", "semicolon", "parens", "comma")
@@ -199,6 +213,11 @@ def extract_voice_dna(
         directives.append("Keep contractions minimal; prefer full clean phrasing.")
     else:
         directives.append("Use natural everyday contractions when speaking smoothly.")
+
+    if oxford_comma_rate < 0.35:
+        directives.append("Avoid stiff Oxford-comma triads ('a, b, and c'); connect thoughts naturally without list templates.")
+    if personal_pronoun_rate >= 2.0:
+        directives.append("Write directly to the reader ('you'/'we'/'I') instead of third-person textbook phrasing like 'allows businesses to'.")
 
     if lowercase_start_rate >= 0.45:
         directives.append("Prefer lowercase sentence starts for a relaxed, natural cadence.")
@@ -226,6 +245,8 @@ def extract_voice_dna(
         "lowercase_start_rate": round(lowercase_start_rate, 2),
         "lowercase_i_rate": round(lowercase_i_rate, 2),
         "no_trailing_period_rate": round(no_trailing_period_rate, 2),
+        "oxford_comma_rate": round(oxford_comma_rate, 2),
+        "personal_pronoun_rate": round(personal_pronoun_rate, 2),
         "punctuation_profile": punctuation_profile,
         "common_openers": common_openers,
         "common_fillers_and_slang": common_fillers,

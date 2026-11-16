@@ -100,6 +100,7 @@
     dom.btnGrabClipboard = document.getElementById("btn-grab-clipboard");
     dom.btnSampleAi = document.getElementById("btn-sample-ai");
     dom.btnClearSource = document.getElementById("btn-clear-source");
+    dom.btnVerifySourceInspector = document.getElementById("btn-verify-source-inspector");
     dom.analysisSpinner = document.getElementById("analysis-spinner");
 
     // Studio: Metrics & Tells
@@ -126,6 +127,7 @@
     dom.outputWordCount = document.getElementById("output-word-count");
     dom.outputCharCount = document.getElementById("output-char-count");
     dom.btnCopyOnly = document.getElementById("btn-copy-only");
+    dom.btnVerifyOutputInspector = document.getElementById("btn-verify-output-inspector");
     dom.diffBadge = document.getElementById("diff-badge");
     dom.providerPill = document.getElementById("provider-pill");
     dom.providerName = document.getElementById("provider-name");
@@ -589,7 +591,7 @@
         dom.hintHumanScore.textContent = "Moderate AI characteristics";
       } else {
         dom.valHumanScore.className = "metric-value font-mono text-rose";
-        dom.hintHumanScore.textContent = "Heavy synthetic clichés";
+        dom.hintHumanScore.textContent = "Strong AI prose signals";
       }
     }
     if (dom.barHumanScore) {
@@ -1912,6 +1914,27 @@
     }
   }
 
+  function sendTextToInspectorAndScan(text, titleLabel) {
+    const cleaned = (text || "").trim();
+    if (cleaned.length < 50) {
+      showToast(
+        "Too Short for 3-Stage Scan",
+        "Provide at least 50 characters to run a full 3-stage check.",
+        "error"
+      );
+      return;
+    }
+    if (dom.inspectorInput) dom.inspectorInput.value = cleaned;
+    if (dom.inspectorDocTitle) dom.inspectorDocTitle.value = titleLabel;
+    updateInspectorCounts();
+    switchTab("inspector");
+    if (appState.inspectorEngine === "pangram") {
+      handleRunPangramScan();
+    } else {
+      handleRunInHouseScan();
+    }
+  }
+
   async function handleRunPlagiarismScan() {
     const text = dom.inspectorInput?.value || "";
     if (text.trim().length < 50) {
@@ -2853,6 +2876,9 @@
     // Studio: Source actions
     dom.btnGrabClipboard?.addEventListener("click", handleGrabClipboard);
     dom.btnSampleAi?.addEventListener("click", handleTrySampleAiText);
+    dom.btnVerifySourceInspector?.addEventListener("click", () => {
+      sendTextToInspectorAndScan(dom.sourceInput?.value, "Studio Source Draft");
+    });
     dom.btnClearSource?.addEventListener("click", handleClearSource);
 
     // Studio: Live text input debounce
@@ -2881,6 +2907,9 @@
 
     // Studio: Output
     dom.outputText?.addEventListener("input", handleOutputChanged);
+    dom.btnVerifyOutputInspector?.addEventListener("click", () => {
+      sendTextToInspectorAndScan(dom.outputText?.value, "Studio Rewritten Output");
+    });
     dom.btnCopyOnly?.addEventListener("click", handleCopyOnly);
     dom.btnCopyLearn?.addEventListener("click", handleCopyAndLearn);
 

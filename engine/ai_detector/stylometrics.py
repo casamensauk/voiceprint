@@ -65,7 +65,9 @@ _IMPERATIVE_STEP_RE = re.compile(
     r"^(?:Log into|Open|Go to|Click|Tap|Choose|Pick|Write|Type|Upload|Attach|Add|Adjust|Check|Review|Select)\b"
 )
 _OXFORD_TRIAD_RE = re.compile(
-    r"\b[A-Za-z0-9\-]+(?:\s+[A-Za-z0-9\-]+){0,3},\s+[A-Za-z0-9\-]+(?:\s+[A-Za-z0-9\-]+){0,3},\s+(?:and|or)\s+[A-Za-z0-9\-]+",
+    r"\b[A-Za-z0-9\-]+(?:\s+[A-Za-z0-9\-]+){0,3}"
+    r"(?:,\s+[A-Za-z0-9\-]+(?:\s+[A-Za-z0-9\-]+){0,3}){1,4}"
+    r",\s+(?:and|or)\s+[A-Za-z0-9\-]+",
     re.IGNORECASE,
 )
 _UK_SPELLING_RE = re.compile(
@@ -86,6 +88,12 @@ _EXPLAINER_STOCK_RE = re.compile(
     r"before\s+it\s+(?:turns\s+into|escalates)|when\s+things\s+go\s+wrong|in\s+real\s+time|"
     r"thought[- ]leadership|call-to-action|social\s+proof|organic\s+reach|target\s+audience|"
     r"brand\s+sentiment|behind-the-scenes|decision-makers)\b",
+    re.IGNORECASE,
+)
+_INLINE_TEXTBOOK_DEF_RE = re.compile(
+    r"\b(?:gives|allows|lets|enables|helps|provides)\s+"
+    r"(?:businesses|companies|brands|organisations|organizations|users|customers|teams|managers|marketers)\s+"
+    r"(?:a\s+|an\s+|the\s+|direct\s+|easy\s+|instant\s+|built-in\s+|dedicated\s+|to\s+)",
     re.IGNORECASE,
 )
 
@@ -264,6 +272,7 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
     makes_look_count = len(_MAKES_LOOK_RE.findall(cleaned))
     which_eval_count = len(_WHICH_EVAL_RE.findall(cleaned))
     explainer_stock_count = len(_EXPLAINER_STOCK_RE.findall(cleaned))
+    inline_def_count = len(_INLINE_TEXTBOOK_DEF_RE.findall(cleaned))
 
     has_uk_spelling = bool(_UK_SPELLING_RE.search(cleaned))
     has_oxford_comma = bool(re.search(r",\s+(?:and|or)\s+", cleaned))
@@ -329,9 +338,16 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         ai_score += 0.24 if which_eval_count >= 2 else 0.12
         reasons.append(f"Evaluative ', which [verb]s' clause pattern ({which_eval_count}x)")
 
+    if inline_def_count >= 1:
+        ai_score += 0.24 if inline_def_count >= 2 else 0.12
+        reasons.append(f"Encyclopedic '[verb]s businesses/users' definition framing ({inline_def_count}x)")
+
     if explainer_stock_count >= 2:
         ai_score += 0.30 if explainer_stock_count >= 4 else 0.18
         reasons.append(f"Plain-English explainer stock phrases ({explainer_stock_count})")
+    elif explainer_stock_count == 1 and (inline_def_count >= 1 or len(triad_hits) >= 1):
+        ai_score += 0.10
+        reasons.append("Plain-English explainer stock phrasing")
 
     if len(rlhf_soft_hits) >= 4 or rlhf_density_per_100 >= 7.0:
         add_soft = 0.22 if rlhf_density_per_100 >= 10.0 else 0.14
@@ -348,7 +364,9 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         reasons.append(f"Uniformly high polysyllabic density ({poly_rate * 100:.0f}% 3+ syllables, avg {avg_word_len:.1f} chars)")
 
     # Cadence & frictionless punctuation checks
-    if len(sent_lengths) >= 3 and cv < 0.26:
+    if (len(sent_lengths) >= 3 and cv < 0.26) or (
+        len(sent_lengths) == 2 and word_count >= 40 and cv < 0.18 and min_sent_len >= 16
+    ):
         ai_score += 0.18
         reasons.append(f"Uniform sentence cadence (burstiness CV={cv:.2f})")
     elif len(sent_lengths) >= 2 and cv < 0.34 and min_sent_len >= 11:
@@ -359,7 +377,12 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         reasons.append(f"Low inter-sentence length delta ({avg_delta:.1f}w)")
 
     has_expressive_punct = bool(re.search(r"[?!()]|--|\.\.\.", cleaned))
-    if len(sent_lengths) >= 3 and not has_expressive_punct and min_sent_len >= 10 and c_cnt == 0:
+    if (
+        (len(sent_lengths) >= 3 or (len(sent_lengths) == 2 and word_count >= 40 and min_sent_len >= 16))
+        and not has_expressive_punct
+        and min_sent_len >= 10
+        and c_cnt == 0
+    ):
         ai_score += 0.10
         reasons.append("Frictionless declarative rhythm (no contractions, questions, or asides)")
 
@@ -427,7 +450,7 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         "burstiness_cv": round(cv, 3),
         "contraction_rate": round(contraction_rate, 3),
         "mattr": round(mattr, 3),
-        "ai_lexicon_hits": len(vocab_hits) + len(transition_hits) + len(framing_hits) + taxonomy_count + len(triad_hits),
+        "ai_lexicon_hits": len(vocab_hits) + len(transition_hits) + len(framing_hits) + taxonomy_count + len(triad_hits) + inline_def_count,
         "unicode_anomaly_count": uni["unicode_anomaly_count"],
         "homoglyph_count": uni["homoglyph_count"],
         "has_personal_counter": (casual_hits >= 2 and not has_heavy_coursework_ai) or (citation_hits >= 2 and taxonomy_count < 2),

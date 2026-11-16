@@ -407,6 +407,48 @@ class TestRewriter(BaseEngineTestCase):
         self.assertEqual(history[0]["input_text"], ai_input)
         self.assertEqual(history[0]["output_text"], rewritten)
 
+    def test_rewriter_openrouter_auto_and_cross_mode_samples_and_no_list_fragments(self) -> None:
+        """Rewriter prevents noun-list fragments offline and routes through OpenRouter with cross-mode sample fallback."""
+        t1 = (
+            "Meta has business pages which gives businesses a dedicated public profile to display "
+            "opening times, website links, contact details, and location maps so customers can find them easily.\n\n"
+            "Community Groups in Meta allow businesses to build or join local groups to chat directly "
+            "with customers and answer questions in a community forum."
+        )
+
+        # Test A (offline local_only on the 52-word t1 passage above)
+        off_res = rewrite_text(t1, context_mode="casual_chat", intensity="deep", save_history=False, db_path=self.db_path)
+        self.assertNotIn(". Location maps", off_res["rewritten"])
+        self.assertGreater(off_res["after"]["human_score"], off_res["before"]["human_score"])
+        self.assertGreaterEqual(off_res["after"]["human_score"], 70)
+
+        # Test B (cross-mode sample fallback + OpenRouter "auto" provider routing)
+        add_sample(
+            "When we set up a Facebook Page for a shop, you get an easy spot for opening hours, your website and a map pin. People don't have to dig around to find you.",
+            context_mode="long_form",
+            db_path=self.db_path,
+        )
+        add_sample(
+            "Groups are dead useful too. Customers just hop in, ask a quick question and get a real answer from your team.",
+            context_mode="long_form",
+            db_path=self.db_path,
+        )
+        update_settings({"provider": "auto", "openrouter_api_key": "sk-or-test-123"}, db_path=self.db_path)
+
+        fake_llm_reply = (
+            "Setting up a Meta business page gives customers one easy spot for your opening hours, links, phone number and map pin. "
+            "They find you in seconds.\n\n"
+            "Community Groups are just as handy -- folks can drop straight in, chat with your team and get quick answers."
+        )
+        mock_response = _MockHTTPResponse({"choices": [{"message": {"content": fake_llm_reply}}]})
+        with patch("engine.rewriter.urllib.request.urlopen", return_value=mock_response):
+            or_res = rewrite_text(t1, context_mode="casual_chat", intensity="deep", save_history=False, db_path=self.db_path)
+            self.assertTrue(or_res["provider_used"].startswith("openrouter"))
+            self.assertGreaterEqual(or_res["samples_referenced"], 2)
+            self.assertGreaterEqual(or_res["after"]["human_score"], 80)
+            insp = analyze_text_for_ai(or_res["rewritten"], use_openrouter=False, bypass_cache=True, db_path=self.db_path)
+            self.assertEqual(insp["prediction_short"], "Human")
+
 
 class TestGrowWithMeLearningLoop(BaseEngineTestCase):
     """Test Grow With Me continuous learning: user final edits teach rules applied to future rewrites."""
@@ -1214,6 +1256,22 @@ class TestInHouseAiDetector(BaseEngineTestCase):
         res_human = analyze_text_for_ai(human_student, use_openrouter=False, bypass_cache=True, db_path=self.db_path)
         self.assertEqual(res_human["fraction_ai"], 0.0)
         self.assertEqual(res_human["headline"], "Likely Human")
+
+    def test_studio_analyzer_matches_inspector_on_modern_ai(self) -> None:
+        """Studio analyzer and inspector agree on modern AI writing sample."""
+        t1 = (
+            "Meta has business pages which gives businesses a dedicated public profile to display "
+            "opening times, website links, contact details, and location maps so customers can find them easily.\n\n"
+            "Community Groups in Meta allow businesses to build or join local groups to chat directly "
+            "with customers and answer questions in a community forum."
+        )
+        studio = analyze_text(t1)
+        self.assertLessEqual(studio["human_score"], 30)
+        self.assertGreaterEqual(studio["ai_risk_score"], 70)
+        self.assertGreaterEqual(len(studio["flags"]), 2)
+        inspector = analyze_text_for_ai(t1, use_openrouter=False, bypass_cache=True, db_path=self.db_path)
+        self.assertGreaterEqual(inspector["fraction_ai"], 0.80)
+        self.assertEqual(inspector["prediction_short"], "AI")
 
 
 class TestAutoUpdater(BaseEngineTestCase):

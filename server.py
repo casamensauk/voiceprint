@@ -61,7 +61,7 @@ from engine.pangram_client import (  # noqa: E402
     scan_file_pangram,
     scan_text_pangram,
 )
-from engine.rewriter import rewrite_text  # noqa: E402
+from engine.rewriter import resolve_voice_corpus, rewrite_text  # noqa: E402
 from engine.style_dna import extract_voice_dna, learn_from_user_edit  # noqa: E402
 from engine.updater import UpdaterError, check_github_update, stage_and_apply_update  # noqa: E402
 from engine.version import APP_VERSION  # noqa: E402
@@ -288,7 +288,8 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
             settings = get_public_settings()
             mode = (qs.get("mode") or [settings.get("active_context_mode") or "casual_chat"])[0]
             text = _read_pbpaste()
-            dna = extract_voice_dna(get_samples(context_mode=mode), get_learned_replacements(context_mode=mode))
+            samples, rules, _ = resolve_voice_corpus(mode)
+            dna = extract_voice_dna(samples, rules)
             self._send_json({"text": text, "analysis": analyze_text(text, dna), "context_mode": mode})
             return
 
@@ -323,7 +324,8 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
         if path == "/api/analyze":
             text = str(body.get("text") or "")
             mode = str(body.get("context_mode") or get_public_settings().get("active_context_mode") or "casual_chat")
-            dna = extract_voice_dna(get_samples(context_mode=mode), get_learned_replacements(context_mode=mode))
+            samples, rules, _ = resolve_voice_corpus(mode)
+            dna = extract_voice_dna(samples, rules)
             self._send_json({"analysis": analyze_text(text, dna), "context_mode": mode})
             return
 
@@ -352,7 +354,8 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
                 ai_draft=ai_draft,
                 user_final_edit=user_final_edit,
             )
-            dna = extract_voice_dna(get_samples(context_mode=mode), get_learned_replacements(context_mode=mode))
+            samples, rules, _ = resolve_voice_corpus(mode)
+            dna = extract_voice_dna(samples, rules)
             analysis = analyze_text(user_final_edit, dna)
             self._send_json({
                 **learn_res,

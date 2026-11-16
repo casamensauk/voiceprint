@@ -90,7 +90,7 @@
         <!-- Update button -->
         <button type="button" class="btn btn-secondary btn-sm" id="btn-check-update" title="Check GitHub for VoicePrint updates">
           <span class="update-dot" id="update-btn-dot" style="display: none;"></span>
-          <span id="update-btn-label">v1.2.2 · Update</span>
+          <span id="update-btn-label">v1.2.3 · Update</span>
         </button>
 
         <!-- Settings button -->
@@ -178,6 +178,7 @@
                 <button type="button" class="btn btn-ghost btn-sm" id="btn-sample-ai" title="Load an AI-cliché heavy paragraph to test">
                   <span>Try Sample AI Text</span>
                 </button>
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-verify-source-inspector" title="Send source text to AI & Originality Inspector for full 3-stage scan"><span>3-Stage Check</span></button>
                 <button type="button" class="btn btn-ghost btn-sm text-muted" id="btn-clear-source" title="Clear source text">
                   <span>Clear</span>
                 </button>
@@ -232,7 +233,7 @@
                     <div class="score-bar-bg">
                       <div class="score-bar-fill fill-rose" id="bar-ai-risk" style="width: 0%;"></div>
                     </div>
-                    <span class="metric-hint" id="hint-ai-risk">Tell density & clichés</span>
+                    <span class="metric-hint" id="hint-ai-risk">Forensic stylometrics & tells</span>
                   </div>
 
                   <!-- Burstiness Score -->
@@ -326,6 +327,7 @@
                   <span class="diff-dot pulse-amber"></span>
                   <span>Diff detected — VoicePrint will learn from your tweaks on copy</span>
                 </div>
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-verify-output-inspector" title="Verify rewritten output in AI & Originality Inspector"><span>3-Stage Check</span></button>
                 <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-only" title="Copy text to clipboard">
                   <svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
                     <path d="M7 9a2 2 0 012-2h6a2 2 0 012 2v6a2 2 0 01-2 2H9a2 2 0 01-2-2V9z"/>
@@ -1567,8 +1569,9 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
             <div class="form-group">
               <label for="setting-provider" class="form-label">Active Engine Provider</label>
               <select id="setting-provider" class="form-select">
-                <option value="auto">Auto-Select (Gemini → OpenAI → Anthropic → Ollama → Local)</option>
+                <option value="auto">Auto-Select (OpenRouter → Gemini → OpenAI → Anthropic → Ollama → Local)</option>
                 <option value="local_only">Zero-Inference Local Only (100% Offline &amp; Free)</option>
+                <option value="openrouter">OpenRouter (API Key — Multi-Model)</option>
                 <option value="gemini">Google Gemini (API Key)</option>
                 <option value="openai">OpenAI (API Key)</option>
                 <option value="anthropic">Anthropic Claude (API Key)</option>
@@ -1666,17 +1669,17 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
               </div>
             </div>
 
-            <!-- OpenRouter Card (In-House 3-Stage AI Detector — <$0.001 / 1k words) -->
+            <!-- OpenRouter Card (Voice Rewriter & 3-Stage AI Detector — <$0.001 / 1k words) -->
             <div class="provider-config-card" id="card-setting-openrouter">
               <div class="provider-card-head">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                  <span class="provider-card-name">OpenRouter — In-House 3-Stage AI Detector</span>
+                  <span class="provider-card-name">OpenRouter — Voice Rewriter &amp; 3-Stage AI Detector</span>
                   <span class="text-xs text-muted">(&lt;$0.001 / 1k words)</span>
                 </div>
                 <span class="provider-status-badge badge-unconfigured" id="badge-openrouter">Offline Stage-1 Only</span>
               </div>
               <p class="text-sm text-muted" style="margin-bottom: 10px;">
-                Powers Stage 2 (DNA-GPT Regeneration Perplexity) and Stage 3 (Dual-Persona Arbiter Synthesis) at &lt;$0.001/1k words. When omitted or offline, VoicePrint operates with zero API cost in Stage-1 Stylometric Forensics mode.
+                Powers BOTH Studio "Rewrite in My Voice" (cloning your uploaded samples) and Stage 2/3 of the In-House AI Detector at &lt;$0.001 / 1k words (default <code>google/gemini-2.5-flash</code>). When omitted or offline, VoicePrint operates with zero API cost in Stage-1 Stylometric Forensics mode.
               </p>
               <div class="form-row form-grid-2">
                 <div class="form-group">
