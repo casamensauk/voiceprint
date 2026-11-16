@@ -231,6 +231,9 @@
     dom.settingPangramKey = document.getElementById("setting-pangram-key");
     dom.btnClearPangram = document.getElementById("btn-clear-pangram");
     dom.btnTestPangram = document.getElementById("btn-test-pangram");
+    dom.badgeTypesafe = document.getElementById("badge-typesafe");
+    dom.settingTypesafeKey = document.getElementById("setting-typesafe-key");
+    dom.btnClearTypesafe = document.getElementById("btn-clear-typesafe");
     dom.settingPangramModel = document.getElementById("setting-pangram-model");
     dom.settingPangramPublicLink = document.getElementById("setting-pangram-public-link");
 
@@ -1009,6 +1012,15 @@
     if (dom.settingPangramModel) {
       dom.settingPangramModel.value = s.pangram_model || "pangram-4";
     }
+    if (dom.badgeTypesafe) {
+      if (s.typesafe_api_key_configured) {
+        dom.badgeTypesafe.textContent = `Configured (${s.typesafe_api_key_preview || "••••"})`;
+        dom.badgeTypesafe.className = "provider-status-badge badge-configured";
+      } else {
+        dom.badgeTypesafe.textContent = "Not Configured";
+        dom.badgeTypesafe.className = "provider-status-badge badge-unconfigured";
+      }
+    }
     if (dom.settingPangramPublicLink) {
       dom.settingPangramPublicLink.checked = s.pangram_public_link === "true" || s.pangram_public_link === true;
     }
@@ -1538,7 +1550,7 @@
 
   function closeSettingsModal() {
     if (dom.settingsModalBackdrop) dom.settingsModalBackdrop.style.display = "none";
-    appState.clearKeyFlags = { gemini: false, openai: false, anthropic: false, pangram: false, openrouter: false };
+    appState.clearKeyFlags = { gemini: false, openai: false, anthropic: false, pangram: false, openrouter: false, typesafe: false };
   }
 
   async function handleSaveSettings(e) {
@@ -1577,6 +1589,10 @@
     const pangramKey = dom.settingPangramKey?.value || "";
     if (pangramKey) payload.pangram_api_key = pangramKey;
     if (appState.clearKeyFlags.pangram) payload.clear_pangram_api_key = true;
+
+    const typesafeKey = dom.settingTypesafeKey?.value || "";
+    if (typesafeKey) payload.typesafe_api_key = typesafeKey;
+    if (appState.clearKeyFlags.typesafe) payload.clear_typesafe_api_key = true;
 
     try {
       const res = await apiRequest("/api/settings", "POST", payload);
@@ -3034,6 +3050,16 @@
       if (dom.settingPangramKey) dom.settingPangramKey.value = "";
     });
     dom.btnTestPangram?.addEventListener("click", handleTestPangramKey);
+
+    // TypeSafe (Jev) Settings Clear
+    dom.btnClearTypesafe?.addEventListener("click", () => {
+      appState.clearKeyFlags.typesafe = true;
+      if (dom.badgeTypesafe) {
+        dom.badgeTypesafe.textContent = "Will be cleared on save";
+        dom.badgeTypesafe.className = "provider-status-badge badge-unconfigured";
+      }
+      if (dom.settingTypesafeKey) dom.settingTypesafeKey.value = "";
+    });
 
     // Inspector Tab Listeners
     dom.inspectorEngineSelect?.addEventListener("change", async (e) => {

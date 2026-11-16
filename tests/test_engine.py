@@ -64,6 +64,7 @@ from engine.db import (
     add_sample,
     clear_samples,
     get_connection,
+    get_jev_estimate,
     get_learned_replacements,
     get_pangram_scans,
     get_public_settings,
@@ -71,10 +72,14 @@ from engine.db import (
     get_samples,
     get_settings,
     init_db,
+    save_jev_estimate,
     seed_demo_samples,
     update_settings,
     upsert_learned_replacement,
 )
+from engine import jev_client
+from engine.jev_client import JevError, choice, evaluate, noul, score
+from engine.jev_judge import DETECTION_QUESTIONS, judge_detection
 from engine.importers import detect_format, parse_imported_content
 from engine.pangram_client import (
     PangramError,
@@ -1520,6 +1525,174 @@ class TestAutoUpdater(BaseEngineTestCase):
         with self.assertRaises(UpdaterError) as ctx:
             stage_and_apply_update("https://evil.example.com/VoicePrint-macOS.zip", current_port=18940)
         self.assertEqual(ctx.exception.status_code, 400)
+
+
+CANNED_JEV = {
+    "model": "jev-1.14.0",
+    "answers": {"model_written": {"type": "noul", "noul": 0.9}, "paraphrased": {"type": "noul", "noul": 0.2}},
+    "usage": {"input_tokens": 1000000, "output_tokens": 0},
+}
+
+
+class TestJev(BaseEngineTestCase):
+    SETTINGS = {"typesafe_api_key": "k-test", "jev_enabled": "1"}
+
+    def setUp(self) -> None:
+        super().setUp()
+        for name in ("TYPESAFE_API_KEY", "JEV_API_KEY"):
+            patcher = patch.dict(os.environ, {name: ""})
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_builders_shapes(self) -> None:
+        self.assertEqual(noul("q"), {"type": "noul", "instructions": "q"})
+        self.assertEqual(
+            noul("q", true="t", false="f"),
+            {"type": "noul", "instructions": "q", "criteria": {"true": "t", "false": "f"}},
+        )
+        self.assertEqual(score("q", ["a", "b"]), {"type": "score", "instructions": "q", "criteria": ["a", "b"]})
+        self.assertEqual(choice("q", {"x": "d"}), {"type": "choice", "instructions": "q", "criteria": {"x": "d"}})
+        self.assertEqual(set(DETECTION_QUESTIONS), {"model_written", "paraphrased"})
+
+    def test_evaluate_request_and_cost(self) -> None:
+        with patch.object(jev_client, "_post_json", return_value=CANNED_JEV) as post:
+            res = evaluate("secret words", {"q": noul("x")}, settings=self.SETTINGS)
+        url, key, body, _timeout = post.call_args[0]
+        self.assertEqual(url, "https://api.typesafe.ai/v1/systemone")
+        self.assertEqual(key, "k-test")
+        self.assertEqual(body, {"model": "jev-1.14.0", "state": "secret words", "questions": {"q": noul("x")}})
+        self.assertAlmostEqual(res["cost_usd"], 0.042)
+        self.assertEqual(res["answers"]["model_written"]["noul"], 0.9)
+
+    def test_http_function_sends_bearer_header(self) -> None:
+        fake = MagicMock()
+        fake.__enter__.return_value.read.return_value = json.dumps(CANNED_JEV).encode()
+        with patch("urllib.request.urlopen", return_value=fake) as uo:
+            jev_client._post_json(jev_client.JEV_URL, "k-test", {"a": 1}, 5.0)
+        req = uo.call_args[0][0]
+        self.assertEqual(req.get_header("Authorization"), "Bearer k-test")
+        self.assertEqual(req.get_header("Content-type"), "application/json")
+
+    def test_alias_model_refused_without_network(self) -> None:
+        for model in ("jev-latest", "jev-2-preview"):
+            with patch.object(jev_client, "_post_json") as post:
+                with self.assertRaises(JevError):
+                    evaluate("t", {}, settings={**self.SETTINGS, "jev_model": model})
+            post.assert_not_called()
+
+    def test_disabled_or_keyless_never_touches_network(self) -> None:
+        with patch.object(jev_client, "_post_json") as post:
+            with self.assertRaises(JevError):
+                evaluate("t", {}, settings={**self.SETTINGS, "jev_enabled": "off"})
+            with self.assertRaises(JevError):
+                evaluate("t", {}, settings={"jev_enabled": "1"})
+        post.assert_not_called()
+        self.assertTrue(jev_client.is_jev_enabled(self.SETTINGS))
+        self.assertFalse(jev_client.is_jev_enabled({"jev_enabled": "0", "typesafe_api_key": "k"}))
+        self.assertFalse(jev_client.is_jev_enabled({}))
+
+    def test_key_resolution_order(self) -> None:
+        with patch.dict(os.environ, {"TYPESAFE_API_KEY": "e1", "JEV_API_KEY": "e2"}):
+            self.assertEqual(jev_client.resolve_typesafe_key({"typesafe_api_key": "s"}, "o"), "o")
+            self.assertEqual(jev_client.resolve_typesafe_key({"typesafe_api_key": "s"}), "s")
+            self.assertEqual(jev_client.resolve_typesafe_key({}), "e1")
+        with patch.dict(os.environ, {"TYPESAFE_API_KEY": "", "JEV_API_KEY": "e2"}):
+            self.assertEqual(jev_client.resolve_typesafe_key({}), "e2")
+
+    def test_retry_once_on_429_then_success(self) -> None:
+        calls = [JevError("rate", 429, retry_after=30.0), CANNED_JEV]
+
+        def fake(*_a: Any, **_k: Any) -> Any:
+            item = calls.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        with patch.object(jev_client, "_post_json", side_effect=fake) as post, patch.object(jev_client.time, "sleep") as sl:
+            res = evaluate("t", {}, settings=self.SETTINGS)
+        self.assertEqual(post.call_count, 2)
+        sl.assert_called_once_with(5.0)
+        self.assertEqual(res["model"], "jev-1.14.0")
+
+    def test_second_429_raises_and_401_maps(self) -> None:
+        with patch.object(jev_client, "_post_json", side_effect=JevError("rate", 429)) as post, patch.object(jev_client.time, "sleep") as sl:
+            with self.assertRaises(JevError):
+                evaluate("t", {}, settings=self.SETTINGS)
+        self.assertEqual(post.call_count, 2)
+        sl.assert_called_once_with(1.0)
+        err = urllib.error.HTTPError(jev_client.JEV_URL, 401, "no", {}, io.BytesIO(b"{}"))
+        with patch("urllib.request.urlopen", side_effect=err):
+            with self.assertRaises(JevError) as ctx:
+                evaluate("the private text", {}, settings=self.SETTINGS)
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertNotIn("private", ctx.exception.message)
+
+    def test_judge_detection(self) -> None:
+        with patch.object(jev_client, "_post_json", return_value=CANNED_JEV):
+            res = judge_detection("some text", settings=self.SETTINGS)
+        self.assertEqual((res["model_written"], res["paraphrased"]), (0.9, 0.2))
+        self.assertEqual(res["model"], "jev-1.14.0")
+
+    def test_estimate_upsert(self) -> None:
+        self.assertIsNone(get_jev_estimate("abc", db_path=self.db_path))
+        save_jev_estimate("abc", "jev-1.14.0", 0.1, 0.2, 10, 0.001, db_path=self.db_path)
+        save_jev_estimate("abc", "jev-1.14.0", 0.7, 0.3, 12, 0.002, db_path=self.db_path)
+        row = get_jev_estimate("abc", db_path=self.db_path)
+        self.assertEqual((row["model_written"], row["input_tokens"]), (0.7, 12))
+        with get_connection(self.db_path) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM jev_estimates").fetchone()[0], 1)
+
+    def test_settings_defaults_and_masking(self) -> None:
+        update_settings({"typesafe_api_key": "abcd1234efgh"}, db_path=self.db_path)
+        pub = get_public_settings(self.db_path)
+        self.assertEqual(pub["typesafe_api_key"], "")
+        self.assertTrue(pub["typesafe_api_key_configured"])
+        self.assertEqual(pub["jev_model"], "jev-1.14.0")
+        update_settings({"typesafe_api_key": ""}, db_path=self.db_path)
+        self.assertEqual(get_settings(self.db_path)["typesafe_api_key"], "abcd1234efgh")
+
+    def _seed_scans(self) -> None:
+        from engine.db import add_pangram_scan
+
+        for text, frac, hum in (
+            ("alpha " * 30, 0.9, 0.8),
+            ("bravo " * 30, 0.1, 0.0),
+        ):
+            add_pangram_scan("text", "t", text, 30, 0.0, "h", frac, 0.0, 1 - frac, hum, "", {}, db_path=self.db_path)
+
+    def test_calibration_script(self) -> None:
+        import contextlib
+
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+        try:
+            import calibrate_jev
+        finally:
+            sys.path.pop(0)
+        self._seed_scans()
+        update_settings({"typesafe_api_key": "k-test"}, db_path=self.db_path)
+
+        out = io.StringIO()
+        with patch.object(jev_client, "_post_json") as post, contextlib.redirect_stdout(out):
+            self.assertEqual(calibrate_jev.main(["--db", str(self.db_path)]), 0)
+        post.assert_not_called()
+        self.assertIn("Texts that would be sent: 2", out.getvalue())
+        self.assertIn("api.typesafe.ai", out.getvalue())
+        self.assertNotIn("alpha", out.getvalue())
+
+        out = io.StringIO()
+        with patch.object(jev_client, "_post_json", return_value=CANNED_JEV) as post, contextlib.redirect_stdout(out):
+            self.assertEqual(calibrate_jev.main(["--db", str(self.db_path), "--run"]), 0)
+        self.assertEqual(post.call_count, 2)
+        text = out.getvalue()
+        self.assertNotIn("alpha", text)
+        self.assertNotIn("bravo", text)
+        self.assertIn("1 of 2", text)
+        with get_connection(self.db_path) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM jev_estimates").fetchone()[0], 2)
+
+        with patch.object(jev_client, "_post_json") as post, contextlib.redirect_stdout(io.StringIO()):
+            calibrate_jev.main(["--db", str(self.db_path), "--run"])
+        post.assert_not_called()  # cached
 
 
 if __name__ == "__main__":
