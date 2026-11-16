@@ -496,6 +496,27 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
     elif ai_score < 0.38 and not any("Natural" in r or "Empirical" in r for r in reasons):
         reasons.insert(0, "Human sentence variation and voice outweigh minor stylistic cues")
 
+    # Exact matched text for the pattern-based signals (reporting only; never affects scoring)
+    findings: list[dict[str, Any]] = []
+
+    def _add_finding(label: str, pattern: re.Pattern[str]) -> None:
+        found = [m.group(0).strip() for m in pattern.finditer(cleaned)]
+        if found:
+            findings.append({"reason": label, "matches": list(dict.fromkeys(found))})
+
+    _add_finding("Plain-English explainer stock phrases", _EXPLAINER_STOCK_RE)
+    _add_finding("Evaluative ', which [verb]s' clause", _WHICH_EVAL_RE)
+    _add_finding("Faux-casual topic scaffolding", _FAUX_CASUAL_SCAFFOLD_RE)
+    _add_finding("Encyclopedic '[verb]s businesses/users' definition", _INLINE_TEXTBOOK_DEF_RE)
+    _add_finding("Explainer 'makes [entity] look' pattern", _MAKES_LOOK_RE)
+    triad_found = list(dict.fromkeys(t.strip() for t in triad_hits))
+    if triad_found:
+        findings.append({"reason": "Parallel Oxford-comma triads", "matches": triad_found})
+    for label, pat in _RLHF_FRAMING_PATTERNS:
+        _add_finding(f"RLHF framing: {label}", pat)
+    if is_two_sent_template:
+        findings.append({"reason": "Symmetric 2-sentence-per-paragraph template", "matches": []})
+
     return {
         "stylometric_ai_score": round(min(1.0, max(0.0, ai_score)), 4),
         "stylometric_humanizer_score": round(min(1.0, max(0.0, humanizer_score)), 4),
@@ -507,4 +528,5 @@ def score_window_stylometrics(text: str) -> dict[str, Any]:
         "homoglyph_count": uni["homoglyph_count"],
         "has_personal_counter": (casual_hits >= 2 and not (has_heavy_coursework_ai or has_heavy_humanizer)) or (citation_hits >= 2 and taxonomy_count < 2),
         "reasons": reasons,
+        "findings": findings,
     }

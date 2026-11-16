@@ -16,6 +16,7 @@ from .analyzer import (
     ROBOTIC_TRANSITIONS,
     analyze_text,
     compute_burstiness,
+    is_signoff_fragment,
     split_sentences,
 )
 from .db import (
@@ -64,6 +65,54 @@ CASUAL_UPGRADES: dict[str, str] = {
     "due to the fact that": "because",
     "at this point in time": "right now",
     "in the near future": "soon",
+}
+
+
+# Rewrites scoring below this on the app's own detector (human_score) trigger a repair round.
+TARGET_HUMAN_SCORE = 70
+MAX_REPAIR_ROUNDS_CAP = 3
+DEFAULT_REPAIR_ROUNDS = 2
+
+# Plain-wording swaps for the phrases matched by the detector's explainer stock regex.
+# Keys are lowercase with single spaces; every value must NOT re-match that regex.
+PLAIN_WORDING_SWAPS: dict[str, str] = {
+    "so customers can": "so that customers can",
+    "so users can": "so that users can",
+    "so people can": "so that people can",
+    "so followers can": "so that followers can",
+    "potential customers": "people who might buy",
+    "potential new customers": "new customers",
+    "turns a negative situation into a positive": "turns a bad situation into a good one",
+    "before it turns into": "before it becomes",
+    "before it escalates": "before it gets worse",
+    "when things go wrong": "when problems come up",
+    "in real time": "as it happens",
+    "thought leadership": "expert content",
+    "thought-leadership": "expert content",
+    "call-to-action": "call to action",
+    "social proof and engagement": "trust and engagement",
+    "social proof": "trust",
+    "organic reach": "unpaid reach",
+    "target audience": "audience",
+    "brand sentiment": "what people think of the brand",
+    "behind-the-scenes": "behind the scenes",
+    "decision-makers": "decision makers",
+    "visual product": "product you can show off",
+    "visual products": "products you can show off",
+    "lifestyle brand": "brand",
+    "lifestyle brands": "brands",
+    "high-quality photos and videos": "good photos and videos",
+    "high-quality photos": "good photos",
+    "influencer partnership": "influencer deal",
+    "influencer partnerships": "influencer deals",
+    "content creator": "creator",
+    "content creators": "creators",
+    "demo product": "show the product",
+    "demo products": "show products",
+    "younger audience": "younger people",
+    "younger audiences": "younger people",
+    "discovering new products": "finding new products",
+    "product discovery": "finding products",
 }
 
 
@@ -166,7 +215,10 @@ def _build_llm_prompts(
         f"5. NEVER use faux-casual list transitions ('Another good way to use X is...', 'X is really good for...'), parallel 3-or-4-item Oxford-comma lists, RLHF framing ('Instead of...', 'By ...ing,', 'At its core,', 'Ultimately,'), 'Heading: Explanation' colons, Unicode em-dashes (—), 'Not only ... but also', or '**Label**:' bullets.\n"
         f"6. NEVER use AI clichés (delve, tapestry, testament, underscore, multifaceted, foster, realm, pivotal, crucial, intricate, meticulous, vibrant, landscape, embark, unleash, elevate, leverage, synergy, seamless, robust, comprehensive, transformative, moreover, furthermore, in conclusion, it's worth noting, at the end of the day).\n"
         f"7. Rewrite intensity: {intensity}.\n"
-        f"8. VOICE DNA TARGETS:\n{directives}"
+        f"8. NEVER tack on evaluative ', which helps/makes/shows/means/allows/gives/builds ...' clauses; start a new sentence or drop the aside.\n"
+        f"9. AVOID marketing stock phrases (lifestyle brand, content creators, influencer partnerships, social proof and engagement, target audience, organic reach, call-to-action, thought leadership, brand sentiment, potential customers, high-quality photos, in real time, younger audiences); use plain everyday words instead.\n"
+        f"10. Do NOT give every paragraph the same number of sentences; mix one-sentence, three-sentence and two-sentence paragraphs.\n"
+        f"11. VOICE DNA TARGETS:\n{directives}"
         f"{rules_block}"
         f"{samples_block}"
         f"{edits_block}\n\n"
@@ -415,6 +467,58 @@ def _modulate_burstiness(text: str, target_avg: float, intensity: str, from_llm:
     return "\n".join(out_paragraphs)
 
 
+_WHICH_CLAUSE_RE = re.compile(
+    r",\s+which\s+(makes|damages|puts|helps|shows|matches|leads|creates|builds|turns|means|allows|gives)\b",
+    re.IGNORECASE,
+)
+
+
+def _repair_which_clauses(text: str) -> str:
+    """Turn ', which helps ...' tack-on clauses into their own sentence: '. That helps ...'."""
+    return _WHICH_CLAUSE_RE.sub(lambda m: f". That {m.group(1)}", text)
+
+
+def _swap_stock_phrases(text: str) -> str:
+    """Replace marketing stock phrases with plain wording of the same meaning."""
+    from .ai_detector.stylometrics import _EXPLAINER_STOCK_RE
+
+    def _sub(m: re.Match[str]) -> str:
+        key = re.sub(r"\s+", " ", m.group(0).lower())
+        plain = PLAIN_WORDING_SWAPS.get(key)
+        return _match_case(plain, m.group(0)) if plain else m.group(0)
+
+    out = _EXPLAINER_STOCK_RE.sub(_sub, text)
+    return re.sub(r"\bone one\b", "one", out)
+
+
+def _two_sentence_para_flags(paras: list[str]) -> list[bool]:
+    from .ai_detector.preprocessor import split_sentences_recover_collapsed
+
+    flags = []
+    for para in paras:
+        sents = [s for s in split_sentences_recover_collapsed(para) if not is_signoff_fragment(s)]
+        flags.append(len(sents) == 2)
+    return flags
+
+
+def _break_two_sentence_template(text: str) -> str:
+    """Merge adjacent two-sentence paragraphs while the detector's symmetric template condition holds."""
+    for _ in range(6):
+        paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+        if len(paras) < 3:
+            return text
+        flags = _two_sentence_para_flags(paras)
+        if sum(flags) / float(len(paras)) < 0.67:
+            return text
+        pairs = [i for i in range(len(paras) - 1) if flags[i] and flags[i + 1]]
+        if not pairs:
+            return text
+        i = min(pairs, key=lambda k: len(paras[k].split()) + len(paras[k + 1].split()))
+        paras[i : i + 2] = [paras[i] + " " + paras[i + 1]]
+        text = "\n\n".join(paras)
+    return text
+
+
 def _apply_contractions(text: str, target_rate: float) -> str:
     out = text
     if target_rate >= 0.45:
@@ -614,15 +718,54 @@ def apply_deterministic_de_ai(
             out,
             flags=re.IGNORECASE,
         )
+    if intensity in ("natural", "deep"):
+        out = _repair_which_clauses(out)
     out = re.sub(r"[ \t]{2,}", " ", out)
     out = re.sub(r"(?m)^\s*,\s*", "", out)
 
     # 6. Burstiness rhythm modulation
     out = _modulate_burstiness(out, float(dna.get("avg_sentence_length", 12.0)), intensity, from_llm=from_llm)
 
+    # 6b. Plain wording for marketing stock phrases (after burstiness, which keys off "so people can")
+    if intensity in ("natural", "deep"):
+        out = _swap_stock_phrases(out)
+
     # 7. Personal Voice DNA surface polish
     out = _apply_surface_dna(out, context_mode, dna, intensity, original_text=original_text or text)
+
+    # 8. Break the symmetric two-sentence-paragraph template (merges paragraphs only)
+    if intensity in ("natural", "deep"):
+        out = _break_two_sentence_template(out)
     return out
+
+
+def _repair_round_limit(settings: dict[str, str]) -> int:
+    try:
+        n = int(str(settings.get("rewrite_max_repair_rounds", DEFAULT_REPAIR_ROUNDS)).strip())
+    except (TypeError, ValueError):
+        n = DEFAULT_REPAIR_ROUNDS
+    return max(0, min(MAX_REPAIR_ROUNDS_CAP, n))
+
+
+def _build_repair_prompt(draft: str) -> str:
+    """Revision request that quotes the exact text the app's detector flagged."""
+    from .ai_detector.stylometrics import score_window_stylometrics
+
+    stylo = score_window_stylometrics(draft)
+    lines: list[str] = []
+    for f in stylo.get("findings") or []:
+        quoted = "; ".join(f'"{m}"' for m in f["matches"][:6])
+        lines.append(f"- {f['reason']}: {quoted}" if quoted else f"- {f['reason']}")
+    reasons = "; ".join((stylo.get("reasons") or [])[:5])
+    flagged = "\n".join(lines) if lines else "- (no exact phrases; fix the general rhythm and word choice)"
+    return (
+        "An AI-text detector still flags this draft. Rewrite it so these exact passages are gone, replaced with plain everyday wording, "
+        "and vary paragraph length (do not give every paragraph two sentences). Do not tack on ', which helps/makes...' clauses.\n"
+        f"Flagged text:\n{flagged}\n"
+        f"Detector reasons: {reasons}\n"
+        "Keep every fact and the meaning unchanged, use natural contractions, avoid email sign-offs, and return ONLY the revised text.\n\n"
+        f"Draft:\n{draft}"
+    )
 
 
 def rewrite_text(
@@ -665,44 +808,42 @@ def rewrite_text(
         provider_setting, settings, sys_prompt, usr_prompt
     )
 
-    base_text = llm_draft if llm_draft else cleaned
-    rewritten = apply_deterministic_de_ai(
-        base_text,
-        context_mode=mode,
-        dna=dna,
-        learned_replacements=learned_rules,
-        intensity=eff_intensity,
-        from_llm=bool(llm_draft),
-        original_text=cleaned,
-    )
+    def _deterministic(src: str, from_llm: bool) -> str:
+        return apply_deterministic_de_ai(
+            src,
+            context_mode=mode,
+            dna=dna,
+            learned_replacements=learned_rules,
+            intensity=eff_intensity,
+            from_llm=from_llm,
+            original_text=cleaned,
+        )
 
-    # 1-pass Voice Fidelity self-check when LLM generated text
-    if llm_draft and len(rewritten.split()) >= 20:
-        from .ai_detector.stylometrics import score_window_stylometrics
+    rewritten = _deterministic(llm_draft if llm_draft else cleaned, bool(llm_draft))
+    repair_rounds = 0
 
-        stylo = score_window_stylometrics(rewritten)
-        if float(stylo["stylometric_ai_score"]) >= 0.35:
-            reasons_txt = "; ".join((stylo.get("reasons") or [])[:4])
-            critique_prompt = (
-                f"Revise this draft to better reflect the user's writing style in the samples above while addressing these stylistic cues: {reasons_txt}. "
-                f"Keep the core meaning accurate, use natural contractions, vary sentence length naturally, avoid tacked-on email closings, and return ONLY the revised text.\n\nDraft:\n{rewritten}"
-            )
-            refined_raw, refined_prov = _call_llm_provider(
-                provider_setting, settings, sys_prompt, critique_prompt
-            )
-            if refined_raw:
-                refined = apply_deterministic_de_ai(
-                    refined_raw,
-                    context_mode=mode,
-                    dna=dna,
-                    learned_replacements=learned_rules,
-                    intensity=eff_intensity,
-                    from_llm=True,
-                    original_text=cleaned,
+    if llm_draft:
+        best_score = int(analyze_text(rewritten, dna)["human_score"])
+        max_rounds = _repair_round_limit(settings)
+        if len(rewritten.split()) >= 20:
+            while best_score < TARGET_HUMAN_SCORE and repair_rounds < max_rounds:
+                revision_prompt = _build_repair_prompt(rewritten)
+                refined_raw, refined_prov = _call_llm_provider(
+                    provider_setting, settings, sys_prompt, revision_prompt
                 )
-                if float(score_window_stylometrics(refined)["stylometric_ai_score"]) < float(stylo["stylometric_ai_score"]):
-                    rewritten = refined
-                    provider_used = refined_prov
+                if not refined_raw:
+                    break
+                repair_rounds += 1
+                candidate = _deterministic(refined_raw, True)
+                cand_score = int(analyze_text(candidate, dna)["human_score"])
+                if cand_score > best_score:
+                    rewritten, best_score, provider_used = candidate, cand_score, refined_prov
+
+        # Floor: never return an LLM rewrite that scores worse than the deterministic clean-up
+        floor_text = _deterministic(cleaned, False)
+        if best_score < int(analyze_text(floor_text, dna)["human_score"]):
+            rewritten = floor_text
+            provider_used = "local-dna-engine (fallback)"
 
     after_analysis = analyze_text(rewritten, dna)
     if save_history:
@@ -726,4 +867,5 @@ def rewrite_text(
         "dna_used": dna,
         "provider_used": provider_used,
         "samples_referenced": len(top_samples),
+        "repair_rounds": repair_rounds,
     }
