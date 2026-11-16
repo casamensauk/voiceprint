@@ -22,6 +22,9 @@
     history: [],
     pangramScans: [],
     lastPangramResult: null,
+    lastInspectorResult: null,
+    inspectorEngine: "inhouse",
+    activeHoveredWindowIndex: null,
     maturity: {
       score: 0,
       label: "Seedling",
@@ -38,6 +41,7 @@
       openai: false,
       anthropic: false,
       pangram: false,
+      openrouter: false,
     },
   };
 
@@ -70,6 +74,17 @@
     dom.maturitySamples = document.getElementById("maturity-samples-count");
     dom.maturityGold = document.getElementById("maturity-gold-count");
     dom.btnOpenSettings = document.getElementById("btn-open-settings");
+    dom.btnCheckUpdate = document.getElementById("btn-check-update");
+    dom.updateBtnDot = document.getElementById("update-btn-dot");
+    dom.updateBtnLabel = document.getElementById("update-btn-label");
+    dom.modalUpdateBackdrop = document.getElementById("modal-update-backdrop");
+    dom.btnCloseUpdate = document.getElementById("btn-close-update");
+    dom.updateCurrentVer = document.getElementById("update-current-ver");
+    dom.updateLatestVer = document.getElementById("update-latest-ver");
+    dom.updateStatusBanner = document.getElementById("update-status-banner");
+    dom.updateNotesBox = document.getElementById("update-notes-box");
+    dom.btnRecheckUpdate = document.getElementById("btn-recheck-update");
+    dom.btnConfirmUpdate = document.getElementById("btn-confirm-update");
 
     // Mode pills
     dom.modePills = document.querySelectorAll(".mode-pill");
@@ -193,6 +208,21 @@
     dom.btnClearAnthropic = document.getElementById("btn-clear-anthropic");
     dom.settingOllamaUrl = document.getElementById("setting-ollama-url");
     dom.settingOllamaModel = document.getElementById("setting-ollama-model");
+
+    // Daemon Endpoint
+    dom.daemonEndpointUrl = document.getElementById("daemon-endpoint-url");
+
+    // OpenRouter (In-House AI Detector)
+    dom.cardSettingOpenrouter = document.getElementById("card-setting-openrouter");
+    dom.badgeOpenrouter = document.getElementById("badge-openrouter");
+    dom.settingOpenrouterKey = document.getElementById("setting-openrouter-key");
+    dom.btnClearOpenrouter = document.getElementById("btn-clear-openrouter");
+    dom.btnTestOpenrouter = document.getElementById("btn-test-openrouter");
+    dom.settingOpenrouterUrl = document.getElementById("setting-openrouter-url");
+    dom.settingRegenModels = document.getElementById("setting-regen-models");
+    dom.settingArbiterModel = document.getElementById("setting-arbiter-model");
+
+    // Pangram Labs
     dom.badgePangram = document.getElementById("badge-pangram");
     dom.settingPangramKey = document.getElementById("setting-pangram-key");
     dom.btnClearPangram = document.getElementById("btn-clear-pangram");
@@ -203,6 +233,9 @@
     // Tab 5: AI & Originality Inspector
     dom.btnNavInspector = document.getElementById("tab-nav-inspector");
     dom.paneInspector = document.getElementById("pane-inspector");
+    dom.inspectorEngineSelect = document.getElementById("inspector-engine-select");
+    dom.inspectorSubtitle = document.getElementById("inspector-subtitle");
+    dom.inspectorCostRateLabel = document.getElementById("inspector-cost-rate-label");
     dom.inspectorInput = document.getElementById("inspector-input");
     dom.inspectorWordCount = document.getElementById("inspector-word-count");
     dom.inspectorCharCount = document.getElementById("inspector-char-count");
@@ -216,9 +249,12 @@
     dom.inspectorModelSelect = document.getElementById("inspector-model-select");
     dom.inspectorShareableLink = document.getElementById("inspector-shareable-link");
     dom.inspectorDocTitle = document.getElementById("inspector-doc-title");
+    dom.wrapPangramModel = document.getElementById("wrap-pangram-model");
+    dom.wrapPangramLink = document.getElementById("wrap-pangram-link");
     dom.btnRunFreePrescan = document.getElementById("btn-run-free-prescan");
     dom.btnRunPlagiarismScan = document.getElementById("btn-run-plagiarism-scan");
     dom.btnRunPangramScan = document.getElementById("btn-run-pangram-scan");
+    dom.btnRunScanText = document.getElementById("btn-run-scan-text");
     dom.inspectorPrescanBox = document.getElementById("inspector-prescan-box");
     dom.prescanSummaryText = document.getElementById("prescan-summary-text");
     dom.btnClosePrescan = document.getElementById("btn-close-prescan");
@@ -234,6 +270,14 @@
     dom.inspectorHeadlinePrediction = document.getElementById("inspector-headline-prediction");
     dom.inspectorModelBadge = document.getElementById("inspector-model-badge");
     dom.inspectorDashboardLink = document.getElementById("inspector-dashboard-link");
+    dom.inspectorLowWordBanner = document.getElementById("inspector-low-word-banner");
+    dom.inspectorLowConfBanner = document.getElementById("inspector-low-conf-banner");
+    dom.inspectorEnsembleBar = document.getElementById("inspector-ensemble-bar");
+    dom.telemetryStage1Val = document.getElementById("telemetry-stage1-val");
+    dom.telemetryStage2Val = document.getElementById("telemetry-stage2-val");
+    dom.telemetryStage3Val = document.getElementById("telemetry-stage3-val");
+    dom.telemetryCachePill = document.getElementById("telemetry-cache-pill");
+    dom.telemetryCostPill = document.getElementById("telemetry-cost-pill");
     dom.lblMeterAi = document.getElementById("lbl-meter-ai");
     dom.lblMeterAssisted = document.getElementById("lbl-meter-assisted");
     dom.lblMeterHuman = document.getElementById("lbl-meter-human");
@@ -249,6 +293,7 @@
     dom.cardValHumanizer = document.getElementById("card-val-humanizer");
     dom.cardSubHumanizer = document.getElementById("card-sub-humanizer");
     dom.inspectorHighlightedText = document.getElementById("inspector-highlighted-text");
+    dom.inspectorWindowTooltip = document.getElementById("inspector-window-tooltip");
     dom.inspectorWindowsCount = document.getElementById("inspector-windows-count");
     dom.inspectorWindowsList = document.getElementById("inspector-windows-list");
     dom.inspectorPlagiarismSection = document.getElementById("inspector-plagiarism-section");
@@ -448,6 +493,15 @@
   // =========================================================================
   function applyState(data) {
     if (!data) return;
+    if (data.app_version) {
+      appState.appVersion = data.app_version;
+      if (dom.updateBtnLabel && !appState.latestUpdateInfo?.update_available) {
+        dom.updateBtnLabel.textContent = `v${data.app_version} · Update`;
+      }
+      if (dom.updateCurrentVer) {
+        dom.updateCurrentVer.textContent = `v${data.app_version}`;
+      }
+    }
     if (data.settings) appState.settings = data.settings;
     if (data.active_context_mode) appState.activeContextMode = data.active_context_mode;
     if (data.dna_by_mode) appState.dnaByMode = data.dna_by_mode;
@@ -462,6 +516,10 @@
     if (appState.settings.intensity) {
       appState.intensity = appState.settings.intensity;
     }
+    if (appState.settings && appState.settings.inspector_engine) {
+      appState.inspectorEngine = appState.settings.inspector_engine;
+      if (dom.inspectorEngineSelect) dom.inspectorEngineSelect.value = appState.inspectorEngine;
+    }
 
     renderHeader();
     renderModePills();
@@ -472,6 +530,7 @@
     renderHistoryAndPairs();
     renderPangramHistory();
     renderSettingsModal();
+    updateInspectorEngineUI();
   }
 
   function renderHeader() {
@@ -900,6 +959,26 @@
     // Ollama
     if (dom.settingOllamaUrl) dom.settingOllamaUrl.value = s.ollama_url || "http://localhost:11434";
     if (dom.settingOllamaModel) dom.settingOllamaModel.value = s.ollama_model || "llama3.2";
+
+    // OpenRouter (In-House AI Detector)
+    if (dom.settingOpenrouterUrl) {
+      dom.settingOpenrouterUrl.value = s.openrouter_base_url || "https://openrouter.ai/api/v1";
+    }
+    if (dom.settingRegenModels) {
+      dom.settingRegenModels.value = s.ai_detect_regen_models || "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash";
+    }
+    if (dom.settingArbiterModel) {
+      dom.settingArbiterModel.value = s.ai_detect_arbiter_model || "google/gemini-2.5-flash";
+    }
+    if (dom.badgeOpenrouter) {
+      if (s.openrouter_api_key_configured) {
+        dom.badgeOpenrouter.textContent = `Configured (${s.openrouter_api_key_preview || "••••"})`;
+        dom.badgeOpenrouter.className = "provider-status-badge badge-configured";
+      } else {
+        dom.badgeOpenrouter.textContent = "Offline Stage-1 Only";
+        dom.badgeOpenrouter.className = "provider-status-badge badge-unconfigured";
+      }
+    }
 
     // Pangram Labs (Pay-As-You-Go)
     if (dom.settingPangramModel) {
@@ -1434,7 +1513,7 @@
 
   function closeSettingsModal() {
     if (dom.settingsModalBackdrop) dom.settingsModalBackdrop.style.display = "none";
-    appState.clearKeyFlags = { gemini: false, openai: false, anthropic: false, pangram: false };
+    appState.clearKeyFlags = { gemini: false, openai: false, anthropic: false, pangram: false, openrouter: false };
   }
 
   async function handleSaveSettings(e) {
@@ -1446,6 +1525,9 @@
       anthropic_model: dom.settingAnthropicModel?.value || "",
       ollama_url: dom.settingOllamaUrl?.value || "",
       ollama_model: dom.settingOllamaModel?.value || "",
+      openrouter_base_url: dom.settingOpenrouterUrl?.value || "https://openrouter.ai/api/v1",
+      ai_detect_regen_models: dom.settingRegenModels?.value || "",
+      ai_detect_arbiter_model: dom.settingArbiterModel?.value || "",
       pangram_model: dom.settingPangramModel?.value || "pangram-4",
       pangram_public_link: dom.settingPangramPublicLink?.checked ? "true" : "false",
     };
@@ -1462,6 +1544,10 @@
     const anthropicKey = dom.settingAnthropicKey?.value || "";
     if (anthropicKey) payload.anthropic_api_key = anthropicKey;
     if (appState.clearKeyFlags.anthropic) payload.clear_anthropic_api_key = true;
+
+    const openrouterKey = dom.settingOpenrouterKey?.value || "";
+    if (openrouterKey) payload.openrouter_api_key = openrouterKey;
+    if (appState.clearKeyFlags.openrouter) payload.clear_openrouter_api_key = true;
 
     const pangramKey = dom.settingPangramKey?.value || "";
     if (pangramKey) payload.pangram_api_key = pangramKey;
@@ -1490,6 +1576,38 @@
   // =========================================================================
   // Pangram Labs & Originality Inspector Handlers
   // =========================================================================
+  async function handleTestOpenRouterKey() {
+    const typedKey = dom.settingOpenrouterKey?.value?.trim() || "";
+    const baseUrl = dom.settingOpenrouterUrl?.value?.trim() || "";
+    let url = "/api/ai-detector/test-key";
+    const params = new URLSearchParams();
+    if (typedKey) params.set("api_key", typedKey);
+    if (baseUrl) params.set("base_url", baseUrl);
+    const qs = params.toString();
+    if (qs) url += `?${qs}`;
+
+    const origText = dom.btnTestOpenrouter?.textContent;
+    if (dom.btnTestOpenrouter) {
+      dom.btnTestOpenrouter.textContent = "Testing...";
+      dom.btnTestOpenrouter.disabled = true;
+    }
+    try {
+      const res = await apiRequest(url);
+      if (res && res.ok) {
+        showToast("OpenRouter Connected", `Valid key. ${res.models_available ?? 0} models available.`, "success");
+      } else {
+        showToast("OpenRouter Key Error", res.error || "Unable to verify API key with OpenRouter", "error");
+      }
+    } catch (err) {
+      showToast("OpenRouter Test Failed", err.message, "error");
+    } finally {
+      if (dom.btnTestOpenrouter) {
+        dom.btnTestOpenrouter.textContent = origText || "Test Key";
+        dom.btnTestOpenrouter.disabled = false;
+      }
+    }
+  }
+
   async function handleTestPangramKey() {
     const typedKey = dom.settingPangramKey?.value?.trim() || "";
     let url = "/api/pangram/models";
@@ -1519,6 +1637,46 @@
     }
   }
 
+  function updateInspectorEngineUI() {
+    const isInHouse = appState.inspectorEngine === "inhouse";
+    const hasOrKey = Boolean(appState.settings?.openrouter_api_key_configured);
+
+    if (dom.inspectorSubtitle) {
+      dom.inspectorSubtitle.textContent = isInHouse
+        ? "In-House 3-Stage Ensemble: Forensic Stylometrics, DNA-GPT Perplexity, and Dual-Persona Arbiter"
+        : "Enterprise-grade multi-window AI & humanizer detection via Pangram Labs ($0.05 / 100 words PAYG)";
+    }
+
+    if (dom.btnRunScanText) {
+      if (isInHouse) {
+        dom.btnRunScanText.textContent = hasOrKey
+          ? "Scan with In-House 3-Stage Detector"
+          : "Scan with In-House Forensics ($0 offline)";
+      } else {
+        dom.btnRunScanText.textContent = "Scan with Pangram 4";
+      }
+    }
+
+    if (dom.inspectorCostRateLabel) {
+      if (isInHouse) {
+        dom.inspectorCostRateLabel.innerHTML = hasOrKey
+          ? 'Rate: <span class="text-muted">&lt;$0.001 / 1kw (~$0.0005)</span>'
+          : 'Rate: <span class="text-muted">$0.00 offline (Stage-1 Forensics)</span>';
+      } else {
+        dom.inspectorCostRateLabel.innerHTML = 'PAYG Rate: <span class="text-muted">$0.05 / 100w</span>';
+      }
+    }
+
+    if (dom.wrapPangramModel) {
+      dom.wrapPangramModel.style.display = isInHouse ? "none" : "flex";
+    }
+    if (dom.wrapPangramLink) {
+      dom.wrapPangramLink.style.display = isInHouse ? "none" : "flex";
+    }
+
+    updateInspectorCounts();
+  }
+
   function updateInspectorCounts() {
     const text = dom.inspectorInput?.value || "";
     const words = countWords(text);
@@ -1543,8 +1701,18 @@
     }
 
     if (dom.inspectorCostEst) {
-      const cost = (words / 100.0) * 0.05;
-      dom.inspectorCostEst.textContent = `Est. ~$${cost.toFixed(3)} USD`;
+      if (appState.inspectorEngine === "inhouse") {
+        const hasOrKey = Boolean(appState.settings?.openrouter_api_key_configured);
+        if (hasOrKey) {
+          const cost = (words / 1000.0) * 0.0005;
+          dom.inspectorCostEst.textContent = words > 0 ? `Est. ~$${cost.toFixed(4)} USD` : "Est. <$0.001 USD";
+        } else {
+          dom.inspectorCostEst.textContent = "Est. $0.00 (Offline)";
+        }
+      } else {
+        const cost = (words / 100.0) * 0.05;
+        dom.inspectorCostEst.textContent = `Est. ~$${cost.toFixed(3)} USD`;
+      }
     }
   }
 
@@ -1594,20 +1762,29 @@
         const preferP4 = (dom.inspectorModelSelect?.value || "pangram-4") === "pangram-4";
         const pubLink = dom.inspectorShareableLink?.checked || false;
 
-        const res = await apiRequest("/api/pangram/file", "POST", {
-          filename: file.name,
-          content_base64: b64,
-          prefer_pangram_4: preferP4,
-          public_dashboard_link: pubLink,
-        });
+        let res = null;
+        if (appState.inspectorEngine === "inhouse") {
+          res = await apiRequest("/api/ai-detector/file", "POST", {
+            filename: file.name,
+            content_base64: b64,
+          });
+        } else {
+          res = await apiRequest("/api/pangram/file", "POST", {
+            filename: file.name,
+            content_base64: b64,
+            prefer_pangram_4: preferP4,
+            public_dashboard_link: pubLink,
+          });
+        }
 
         if (res && res.result) {
           if (dom.inspectorInput) dom.inspectorInput.value = res.result.text || "";
           if (dom.inspectorDocTitle) dom.inspectorDocTitle.value = file.name;
           updateInspectorCounts();
-          renderPangramResult(res.result);
+          renderInspectorResult(res.result);
           if (res.state) applyState(res.state);
-          showToast("File Scanned", `Pangram Labs completed analysis for ${file.name}`, "success");
+          const engineLabel = appState.inspectorEngine === "inhouse" ? "In-House 3-Stage Detector" : "Pangram Labs";
+          showToast("File Scanned", `${engineLabel} completed analysis for ${file.name}`, "success");
         }
       } catch (err) {
         showToast("File Scan Failed", err.message, "error");
@@ -1669,6 +1846,36 @@
     }
   }
 
+  async function handleRunInHouseScan() {
+    const text = dom.inspectorInput?.value || "";
+    if (text.trim().length < 50) {
+      showToast("Too Short for AI Detector", "Provide at least 50 characters of text to run AI authorship detection.", "error");
+      return;
+    }
+
+    if (dom.btnRunScanText) dom.btnRunScanText.textContent = "Analyzing with In-House Detector...";
+    if (dom.btnRunPangramScan) dom.btnRunPangramScan.disabled = true;
+
+    try {
+      const title = dom.inspectorDocTitle?.value?.trim() || "";
+      const res = await apiRequest("/api/ai-detector/scan", "POST", {
+        text,
+        title,
+      });
+
+      if (res && res.result) {
+        renderInspectorResult(res.result);
+        if (res.state) applyState(res.state);
+        showToast("In-House Scan Complete", `Verdict: ${res.result.headline || res.result.prediction_short || "Finished"}`, "success");
+      }
+    } catch (err) {
+      showToast("In-House Scan Failed", err.message, "error");
+    } finally {
+      if (dom.btnRunPangramScan) dom.btnRunPangramScan.disabled = false;
+      updateInspectorEngineUI();
+    }
+  }
+
   async function handleRunPangramScan() {
     const text = dom.inspectorInput?.value || "";
     if (text.trim().length < 50) {
@@ -1676,11 +1883,9 @@
       return;
     }
 
-    const origText = dom.btnRunPangramScan?.textContent;
-    if (dom.btnRunPangramScan) {
-      dom.btnRunPangramScan.textContent = "Scanning with Pangram 4...";
-      dom.btnRunPangramScan.disabled = true;
-    }
+    const origText = dom.btnRunScanText ? dom.btnRunScanText.textContent : (dom.btnRunPangramScan ? dom.btnRunPangramScan.textContent : "");
+    if (dom.btnRunScanText) dom.btnRunScanText.textContent = "Scanning with Pangram 4...";
+    if (dom.btnRunPangramScan) dom.btnRunPangramScan.disabled = true;
 
     try {
       const model = dom.inspectorModelSelect?.value || "pangram-4";
@@ -1695,17 +1900,15 @@
       });
 
       if (res && res.result) {
-        renderPangramResult(res.result);
+        renderInspectorResult(res.result);
         if (res.state) applyState(res.state);
         showToast("Pangram 4 Scan Complete", `Verdict: ${res.result.headline || res.result.prediction_short || "Finished"}`, "success");
       }
     } catch (err) {
       showToast("Pangram Scan Failed", err.message, "error");
     } finally {
-      if (dom.btnRunPangramScan) {
-        dom.btnRunPangramScan.textContent = origText || "Scan with Pangram 4";
-        dom.btnRunPangramScan.disabled = false;
-      }
+      if (dom.btnRunPangramScan) dom.btnRunPangramScan.disabled = false;
+      updateInspectorEngineUI();
     }
   }
 
@@ -1730,7 +1933,7 @@
       });
 
       if (res && res.result) {
-        renderPangramResult(res.result);
+        renderInspectorResult(res.result);
         if (res.state) applyState(res.state);
         const score = Math.round((res.result.plagiarism_score || 0) * 100);
         showToast("Plagiarism Scan Complete", `Web overlap score: ${score}%`, "success");
@@ -1749,17 +1952,20 @@
     if (!text) return "";
     if (!windows || windows.length === 0) return escapeHtml(text);
 
-    // Normalize and filter valid windows safely
+    // Normalize and filter valid windows safely while preserving raw array indices
     const validWindows = windows
-      .filter((w) => typeof w.start_index === "number" && typeof w.end_index === "number" && w.start_index < w.end_index)
-      .map((w) => ({
-        start: Math.max(0, Math.min(text.length, w.start_index)),
-        end: Math.max(0, Math.min(text.length, w.end_index)),
+      .map((w, origIdx) => ({
+        origIndex: origIdx,
+        start: typeof w.start_index === "number" ? Math.max(0, Math.min(text.length, w.start_index)) : 0,
+        end: typeof w.end_index === "number" ? Math.max(0, Math.min(text.length, w.end_index)) : 0,
         label: String(w.label || "HUMAN").toUpperCase(),
         isHumanized: Boolean(w.is_humanized || (w.humanizer_score && w.humanizer_score >= 0.5)),
         confidence: w.confidence || 0,
         humanizerScore: w.humanizer_score || 0,
+        isExcluded: Boolean(w.is_excluded_reference),
+        rawWindow: w,
       }))
+      .filter((w) => w.start < w.end)
       .sort((a, b) => a.start - b.start);
 
     let html = "";
@@ -1779,8 +1985,9 @@
         }
         const humanizerClass = w.isHumanized ? " span-humanizer" : "";
         const badge = w.isHumanized ? '<span class="tag-humanizer-scrubbed">Scrubbed</span>' : "";
-        const titleAttr = `${escapeHtml(w.label)} (${Math.round(w.confidence * 100)}%)${w.isHumanized ? " • Humanizer scrubbed" : ""}`;
-        html += `<span class="${cls}${humanizerClass}" title="${titleAttr}">${escapeHtml(segmentText)}${badge}</span>`;
+        const confPct = Math.round((typeof w.confidence === "number" ? w.confidence : (w.rawWindow.ai_assistance_score || 0)) * 100);
+        const titleAttr = `${escapeHtml(w.label)} (${confPct}%)${w.isHumanized ? " • Humanizer scrubbed" : ""}${w.isExcluded ? " • Excluded reference" : ""}`;
+        html += `<span class="${cls}${humanizerClass} interactive-window-span" data-window-index="${w.origIndex}" tabindex="0" title="${titleAttr}">${escapeHtml(segmentText)}${badge}</span>`;
         cursor = w.end;
       }
     }
@@ -1789,6 +1996,124 @@
       html += escapeHtml(text.substring(cursor));
     }
     return html;
+  }
+
+  function attachHighlightedSpansEvents(windows) {
+    if (!dom.inspectorHighlightedText) return;
+    const spans = dom.inspectorHighlightedText.querySelectorAll(".interactive-window-span");
+    spans.forEach((span) => {
+      const idx = parseInt(span.getAttribute("data-window-index"), 10);
+      const win = windows?.[idx];
+      if (!win) return;
+
+      const activate = () => {
+        spans.forEach((s) => s.classList.remove("active-window-span"));
+        span.classList.add("active-window-span");
+        renderWindowDetailCard(win, idx);
+      };
+
+      span.addEventListener("mouseenter", activate);
+      span.addEventListener("click", activate);
+      span.addEventListener("focus", activate);
+    });
+  }
+
+  function renderWindowDetailCard(w, idx) {
+    if (!dom.inspectorWindowTooltip || !w) return;
+    dom.inspectorWindowTooltip.style.display = "block";
+
+    const label = String(w.label || "HUMAN").toUpperCase();
+    let labelBadgeClass = "badge-emerald";
+    if (label === "AI") {
+      labelBadgeClass = "badge-rose";
+    } else if (label === "AI_ASSISTED" || label === "ASSISTED") {
+      labelBadgeClass = "badge-amber";
+    }
+
+    const scoreNum = Math.round(
+      (typeof w.ai_assistance_score === "number"
+        ? w.ai_assistance_score
+        : typeof w.confidence === "number"
+        ? w.confidence
+        : 0) * 100
+    );
+    const confStr = typeof w.confidence === "string" ? w.confidence : `${scoreNum}% Confidence`;
+    const humScore = typeof w.humanizer_score === "number" ? Math.round(w.humanizer_score * 100) : 0;
+    const isHum = Boolean(w.is_humanized || humScore >= 50);
+
+    let reasonsHtml = "";
+    const reasons = Array.isArray(w.reasons) ? w.reasons : [];
+    if (reasons.length > 0) {
+      reasonsHtml = `
+        <div class="detail-reasons-box">
+          <div class="detail-reasons-title">
+            <svg viewBox="0 0 20 20" fill="currentColor" style="width: 14px; height: 14px;">
+              <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+            </svg>
+            <span>Why It Triggered:</span>
+          </div>
+          <ul class="detail-reasons-list">
+            ${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}
+          </ul>
+        </div>
+      `;
+    }
+
+    const sig = w.signals || {};
+    const styScore = sig.stylometric_ai_score != null ? `${Math.round(sig.stylometric_ai_score * 100)}%` : "N/A";
+    const dnaBScore = sig.dna_bscore != null ? sig.dna_bscore.toFixed(3) : "N/A";
+    const arbScore = sig.arbiter_ai_score != null ? `${Math.round(sig.arbiter_ai_score * 100)}%` : "N/A";
+    const burstCv = sig.burstiness_cv != null ? sig.burstiness_cv.toFixed(2) : "N/A";
+    const mattrVal = sig.mattr != null ? sig.mattr.toFixed(2) : "N/A";
+    const unicodeHomo = `${sig.unicode_anomaly_count || 0} / ${sig.homoglyph_count || 0}`;
+
+    dom.inspectorWindowTooltip.innerHTML = `
+      <div class="detail-card-head">
+        <div class="detail-card-badges">
+          <span class="font-mono text-xs text-muted">Window #${idx + 1}</span>
+          <span class="badge ${labelBadgeClass} detail-badge-score">${escapeHtml(label)} (${scoreNum}%)</span>
+          <span class="detail-badge-conf font-mono">${escapeHtml(confStr)}</span>
+          ${isHum ? `<span class="detail-badge-hum tag-humanizer-scrubbed">Scrubbed (${humScore}%)</span>` : ""}
+          ${w.is_excluded_reference ? '<span class="detail-badge-excluded">Excluded Bibliography / Reference</span>' : ""}
+        </div>
+        <div class="text-xs text-muted font-mono">
+          ${w.word_count || 0} words • ${w.token_length || 0} tokens
+        </div>
+      </div>
+
+      <div class="detail-excerpt-box font-mono">
+        "${escapeHtml(w.text || "")}"
+      </div>
+
+      ${reasonsHtml}
+
+      <div class="detail-signals-grid font-mono">
+        <div class="detail-signal-cell">
+          <span class="detail-signal-label">Stylometrics</span>
+          <span class="detail-signal-val ${sig.stylometric_ai_score > 0.6 ? 'text-rose' : ''}">${styScore}</span>
+        </div>
+        <div class="detail-signal-cell">
+          <span class="detail-signal-label">DNA-GPT BScore</span>
+          <span class="detail-signal-val ${sig.dna_bscore > 0.45 ? 'text-rose' : ''}">${dnaBScore}</span>
+        </div>
+        <div class="detail-signal-cell">
+          <span class="detail-signal-label">Arbiter</span>
+          <span class="detail-signal-val ${sig.arbiter_ai_score > 0.6 ? 'text-rose' : ''}">${arbScore}</span>
+        </div>
+        <div class="detail-signal-cell">
+          <span class="detail-signal-label">Burstiness CV</span>
+          <span class="detail-signal-val">${burstCv}</span>
+        </div>
+        <div class="detail-signal-cell">
+          <span class="detail-signal-label">MATTR Vocab</span>
+          <span class="detail-signal-val">${mattrVal}</span>
+        </div>
+        <div class="detail-signal-cell">
+          <span class="detail-signal-label">Unicode / Homo</span>
+          <span class="detail-signal-val ${(sig.unicode_anomaly_count || sig.homoglyph_count) ? 'text-amber' : ''}">${unicodeHomo}</span>
+        </div>
+      </div>
+    `;
   }
 
   function renderWindowBreakdown(windows) {
@@ -1817,7 +2142,13 @@
         }
 
         const isHum = Boolean(w.is_humanized || (w.humanizer_score && w.humanizer_score >= 0.5));
-        const confPct = Math.round((w.confidence || 0) * 100);
+        const confPct = Math.round(
+          (typeof w.confidence === "number"
+            ? w.confidence
+            : typeof w.ai_assistance_score === "number"
+            ? w.ai_assistance_score
+            : 0) * 100
+        );
         const humScore = typeof w.humanizer_score === "number" ? (w.humanizer_score * 100).toFixed(0) : "0";
 
         return `
@@ -1828,7 +2159,8 @@
                 <span style="font-weight: 600; font-size: 11px; padding: 2px 8px; border-radius: var(--radius-pill); background: ${badgeBg};" class="${labelClass}">
                   ${escapeHtml(label)} (${confPct}%)
                 </span>
-                ${isHum ? '<span class="tag-humanizer-scrubbed">Scrubbed (' + humScore + '%)</span>' : ''}
+                ${isHum ? '<span class="tag-humanizer-scrubbed">Scrubbed (' + humScore + '%)</span>' : ""}
+                ${w.is_excluded_reference ? '<span class="detail-badge-excluded" style="font-size: 9px; padding: 1px 6px;">Reference</span>' : ""}
               </div>
               <div class="text-xs text-muted font-mono">
                 ${w.word_count || 0} words • ${w.token_length || 0} tokens
@@ -1884,9 +2216,10 @@
       .join("");
   }
 
-  function renderPangramResult(result) {
+  function renderInspectorResult(result) {
     if (!result) return;
     appState.lastPangramResult = result;
+    appState.lastInspectorResult = result;
 
     if (dom.inspectorEmptyState) dom.inspectorEmptyState.style.display = "none";
     if (dom.inspectorActiveResults) dom.inspectorActiveResults.style.display = "block";
@@ -1895,6 +2228,51 @@
     const headline = result.headline || result.prediction_short || "Completed";
     if (dom.inspectorHeadlineTitle) dom.inspectorHeadlineTitle.textContent = headline;
     if (dom.inspectorHeadlinePrediction) dom.inspectorHeadlinePrediction.textContent = result.prediction || "";
+
+    // Short-Text Warning Banner (<300 words)
+    if (dom.inspectorLowWordBanner) {
+      dom.inspectorLowWordBanner.style.display = result.low_word_count_warning ? "flex" : "none";
+    }
+
+    // Turnitin-Style 1%-19%* Low-Confidence Banner
+    if (dom.inspectorLowConfBanner) {
+      dom.inspectorLowConfBanner.style.display = result.low_confidence_asterisk ? "flex" : "none";
+    }
+
+    // 3-Stage Ensemble Telemetry Bar
+    if (dom.inspectorEnsembleBar) {
+      if (result.ensemble_breakdown) {
+        dom.inspectorEnsembleBar.style.display = "flex";
+        const eb = result.ensemble_breakdown;
+        if (dom.telemetryStage1Val) {
+          dom.telemetryStage1Val.textContent = eb.stage1_avg_ai != null ? `${Math.round(eb.stage1_avg_ai * 100)}%` : "--";
+        }
+        if (dom.telemetryStage2Val) {
+          dom.telemetryStage2Val.textContent = eb.stage2_avg_bscore != null ? `BScore ${eb.stage2_avg_bscore.toFixed(3)}` : "N/A (Offline)";
+        }
+        if (dom.telemetryStage3Val) {
+          dom.telemetryStage3Val.textContent = eb.stage3_avg_arbiter != null ? `${Math.round(eb.stage3_avg_arbiter * 100)}%` : "N/A (Offline)";
+        }
+        if (dom.telemetryCachePill) {
+          if (result.cache_hit) {
+            dom.telemetryCachePill.className = "badge-cache-hit font-mono";
+            dom.telemetryCachePill.textContent = "⚡ Cache Hit (SHA-256)";
+          } else {
+            dom.telemetryCachePill.className = "badge-cache-miss font-mono";
+            dom.telemetryCachePill.textContent = "Live Run";
+          }
+        }
+        if (dom.telemetryCostPill) {
+          const costPer1k = eb.cost_per_1k_words_usd;
+          const costStr = (costPer1k != null && costPer1k > 0)
+            ? `~$${costPer1k.toFixed(4)}/1kw`
+            : (eb.api_cost_usd > 0 ? "<$0.001 / 1kw" : "$0.00 Offline");
+          dom.telemetryCostPill.textContent = costStr;
+        }
+      } else {
+        dom.inspectorEnsembleBar.style.display = "none";
+      }
+    }
 
     const ai = result.fraction_ai || 0;
     const assisted = result.fraction_ai_assisted || 0;
@@ -1918,7 +2296,7 @@
     }
 
     if (dom.inspectorModelBadge) {
-      dom.inspectorModelBadge.textContent = result.model || "pangram-4";
+      dom.inspectorModelBadge.textContent = result.model || (result.engine === "inhouse" ? "inhouse-3stage" : "pangram-4");
     }
 
     if (dom.inspectorDashboardLink) {
@@ -1971,6 +2349,16 @@
     const textToHighlight = result.text || dom.inspectorInput?.value || "";
     if (dom.inspectorHighlightedText) {
       dom.inspectorHighlightedText.innerHTML = renderHighlightedSubmission(textToHighlight, result.windows);
+      attachHighlightedSpansEvents(result.windows);
+    }
+
+    // Auto-select first window in detail card if windows exist
+    if (result.windows && result.windows.length > 0) {
+      renderWindowDetailCard(result.windows[0], 0);
+      const firstSpan = dom.inspectorHighlightedText?.querySelector('.interactive-window-span[data-window-index="0"]');
+      if (firstSpan) firstSpan.classList.add("active-window-span");
+    } else if (dom.inspectorWindowTooltip) {
+      dom.inspectorWindowTooltip.style.display = "none";
     }
 
     // Windows list
@@ -1985,6 +2373,9 @@
     }
   }
 
+  // Alias renderPangramResult to renderInspectorResult
+  const renderPangramResult = renderInspectorResult;
+
   function renderPangramHistory() {
     if (!dom.inspectorHistoryTbody) return;
     const scans = appState.pangramScans || [];
@@ -1996,7 +2387,7 @@
     if (scans.length === 0) {
       dom.inspectorHistoryTbody.innerHTML = `
         <tr>
-          <td colspan="6" class="text-center text-muted" style="padding: 24px;">No saved Pangram scans yet. Run a scan to build history.</td>
+          <td colspan="6" class="text-center text-muted" style="padding: 24px;">No saved AI scans yet. Run a scan to build history.</td>
         </tr>
       `;
       return;
@@ -2016,7 +2407,16 @@
           dateStr = scan.created_at || "";
         }
 
-        const typeLabel = scan.scan_type === "plagiarism" ? "Plagiarism" : (scan.scan_type === "file" ? "File Scan" : "Pangram 4");
+        const typeLabel =
+          scan.scan_type === "inhouse"
+            ? "In-House 3-Stage"
+            : scan.scan_type === "inhouse_file"
+            ? "In-House File"
+            : scan.scan_type === "plagiarism"
+            ? "Plagiarism"
+            : scan.scan_type === "file"
+            ? "Pangram File"
+            : "Pangram 4";
 
         let summaryText = "";
         if (scan.scan_type === "plagiarism") {
@@ -2076,7 +2476,19 @@
     updateInspectorCounts();
 
     const resultObj = typeof item.result === "string" ? JSON.parse(item.result) : (item.result || {});
-    renderPangramResult(resultObj);
+
+    // Sync engine select if the scan was inhouse or pangram
+    if (item.scan_type === "inhouse" || item.scan_type === "inhouse_file" || resultObj.engine === "inhouse") {
+      appState.inspectorEngine = "inhouse";
+    } else if (item.scan_type === "pangram" || item.scan_type === "file" || item.scan_type === "plagiarism" || resultObj.engine === "pangram") {
+      appState.inspectorEngine = "pangram";
+    }
+    if (dom.inspectorEngineSelect) {
+      dom.inspectorEngineSelect.value = appState.inspectorEngine;
+    }
+    updateInspectorEngineUI();
+
+    renderInspectorResult(resultObj);
     showToast("Loaded Result", `Restored scan from ${item.title || "saved history"} ($0 cost)`, "info");
   }
 
@@ -2549,6 +2961,17 @@
       if (dom.settingAnthropicKey) dom.settingAnthropicKey.value = "";
     });
 
+    // OpenRouter Settings Clear & Test
+    dom.btnClearOpenrouter?.addEventListener("click", () => {
+      appState.clearKeyFlags.openrouter = true;
+      if (dom.badgeOpenrouter) {
+        dom.badgeOpenrouter.textContent = "Will be cleared on save";
+        dom.badgeOpenrouter.className = "provider-status-badge badge-unconfigured";
+      }
+      if (dom.settingOpenrouterKey) dom.settingOpenrouterKey.value = "";
+    });
+    dom.btnTestOpenrouter?.addEventListener("click", handleTestOpenRouterKey);
+
     // Pangram Labs Settings Clear & Test
     dom.btnClearPangram?.addEventListener("click", () => {
       appState.clearKeyFlags.pangram = true;
@@ -2561,6 +2984,13 @@
     dom.btnTestPangram?.addEventListener("click", handleTestPangramKey);
 
     // Inspector Tab Listeners
+    dom.inspectorEngineSelect?.addEventListener("change", async (e) => {
+      appState.inspectorEngine = e.target.value;
+      updateInspectorEngineUI();
+      try {
+        await apiRequest("/api/settings", "POST", { inspector_engine: appState.inspectorEngine });
+      } catch (_) {}
+    });
     dom.inspectorInput?.addEventListener("input", updateInspectorCounts);
     dom.btnInspectorClipboard?.addEventListener("click", handleGrabInspectorClipboard);
     dom.btnInspectorUpload?.addEventListener("click", () => dom.fileInspectorUpload?.click());
@@ -2571,7 +3001,13 @@
     dom.btnClosePrescan?.addEventListener("click", () => {
       if (dom.inspectorPrescanBox) dom.inspectorPrescanBox.style.display = "none";
     });
-    dom.btnRunPangramScan?.addEventListener("click", handleRunPangramScan);
+    dom.btnRunPangramScan?.addEventListener("click", () => {
+      if (appState.inspectorEngine === "inhouse") {
+        handleRunInHouseScan();
+      } else {
+        handleRunPangramScan();
+      }
+    });
     dom.btnRunPlagiarismScan?.addEventListener("click", handleRunPlagiarismScan);
 
     // Saved Pangram Scan History Delegated Actions
@@ -2598,6 +3034,126 @@
     dom.btnRunCoach?.addEventListener("click", handleRunCoach);
     dom.btnRunCitationCheck?.addEventListener("click", handleRunCitationCheck);
     dom.btnRunBothAcad?.addEventListener("click", handleRunBothAcademic);
+
+    // Updater Modal Listeners
+    dom.btnCheckUpdate?.addEventListener("click", openUpdateModal);
+    dom.btnCloseUpdate?.addEventListener("click", closeUpdateModal);
+    dom.modalUpdateBackdrop?.addEventListener("click", (e) => {
+      if (e.target === dom.modalUpdateBackdrop) closeUpdateModal();
+    });
+    dom.btnRecheckUpdate?.addEventListener("click", () => checkForUpdates(false));
+    dom.btnConfirmUpdate?.addEventListener("click", handleApplyUpdate);
+  }
+
+  // =========================================================================
+  // In-App GitHub Updater
+  // =========================================================================
+  function openUpdateModal() {
+    if (dom.modalUpdateBackdrop) dom.modalUpdateBackdrop.style.display = "flex";
+    checkForUpdates(false);
+  }
+
+  function closeUpdateModal() {
+    if (dom.modalUpdateBackdrop) dom.modalUpdateBackdrop.style.display = "none";
+  }
+
+  async function checkForUpdates(quiet = true) {
+    if (!quiet && dom.updateStatusBanner) {
+      dom.updateStatusBanner.textContent = "Checking GitHub Releases...";
+      if (dom.btnConfirmUpdate) dom.btnConfirmUpdate.disabled = true;
+    }
+    try {
+      const info = await apiRequest("/api/update/check");
+      appState.latestUpdateInfo = info;
+      if (dom.updateCurrentVer) dom.updateCurrentVer.textContent = `v${info.current_version}`;
+      if (dom.updateLatestVer) dom.updateLatestVer.textContent = `v${info.latest_version}`;
+
+      if (info.update_available) {
+        if (dom.btnCheckUpdate) dom.btnCheckUpdate.classList.add("btn-update-available");
+        if (dom.updateBtnDot) dom.updateBtnDot.style.display = "inline-block";
+        if (dom.updateBtnLabel) dom.updateBtnLabel.textContent = `Update to v${info.latest_version} ↑`;
+        if (dom.updateStatusBanner) {
+          dom.updateStatusBanner.textContent = `New release v${info.latest_version} is available! Click Install Update & Restart below.`;
+        }
+        if (dom.btnConfirmUpdate) {
+          dom.btnConfirmUpdate.disabled = !info.download_url;
+          dom.btnConfirmUpdate.textContent = `Install v${info.latest_version} & Restart`;
+        }
+      } else {
+        if (dom.btnCheckUpdate) dom.btnCheckUpdate.classList.remove("btn-update-available");
+        if (dom.updateBtnDot) dom.updateBtnDot.style.display = "none";
+        if (dom.updateBtnLabel) dom.updateBtnLabel.textContent = `v${info.current_version} · Update`;
+        if (dom.updateStatusBanner) {
+          dom.updateStatusBanner.textContent = `You're on the latest release (v${info.current_version}).`;
+        }
+        if (dom.btnConfirmUpdate) {
+          dom.btnConfirmUpdate.disabled = !info.download_url;
+          dom.btnConfirmUpdate.textContent = "Reinstall Latest Release & Restart";
+        }
+      }
+
+      if (dom.updateNotesBox) {
+        if (info.release_notes && info.release_notes.trim()) {
+          dom.updateNotesBox.textContent = info.release_notes.trim();
+          dom.updateNotesBox.style.display = "block";
+        } else {
+          dom.updateNotesBox.style.display = "none";
+        }
+      }
+    } catch (err) {
+      if (!quiet) {
+        if (dom.updateStatusBanner) {
+          dom.updateStatusBanner.textContent = `Update check failed: ${err.message}`;
+        }
+        showToast("Update Check Failed", err.message, "error");
+      }
+    }
+  }
+
+  async function handleApplyUpdate() {
+    const info = appState.latestUpdateInfo || {};
+    if (dom.btnConfirmUpdate) {
+      dom.btnConfirmUpdate.disabled = true;
+      dom.btnConfirmUpdate.textContent = "Downloading & Installing...";
+    }
+    if (dom.btnRecheckUpdate) dom.btnRecheckUpdate.disabled = true;
+    if (dom.updateStatusBanner) {
+      dom.updateStatusBanner.textContent = "Downloading update from GitHub and restarting VoicePrint...";
+    }
+
+    try {
+      await apiRequest("/api/update/apply", "POST", {
+        download_url: info.download_url || "",
+      });
+      showToast("Updating VoicePrint", "Restarting server with new release...", "info", 6000);
+
+      // Wait briefly for old server to exit, then poll /api/health until restarted
+      await new Promise((r) => setTimeout(r, 1500));
+      for (let i = 0; i < 45; i++) {
+        try {
+          const resp = await fetch("/api/health", { cache: "no-store" });
+          if (resp.ok) {
+            const h = await resp.json();
+            if (h && h.app === "voiceprint") {
+              window.location.reload();
+              return;
+            }
+          }
+        } catch (_) {}
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      if (dom.updateStatusBanner) {
+        dom.updateStatusBanner.textContent = "Update installed — please refresh this page in a moment.";
+      }
+    } catch (err) {
+      showToast("Update Failed", err.message, "error");
+      if (dom.updateStatusBanner) dom.updateStatusBanner.textContent = `Update failed: ${err.message}`;
+      if (dom.btnConfirmUpdate) {
+        dom.btnConfirmUpdate.disabled = false;
+        dom.btnConfirmUpdate.textContent = "Retry Install & Restart";
+      }
+      if (dom.btnRecheckUpdate) dom.btnRecheckUpdate.disabled = false;
+    }
   }
 
   // =========================================================================
@@ -2605,14 +3161,18 @@
   // =========================================================================
   async function init() {
     cacheDomElements();
+    if (dom.daemonEndpointUrl) {
+      dom.daemonEndpointUrl.textContent = window.location.origin;
+    }
     bindEventListeners();
 
     try {
       const state = await apiRequest("/api/state");
       applyState(state);
+      setTimeout(() => checkForUpdates(true), 1500);
     } catch (err) {
       console.error("Failed to load initial state:", err);
-      showToast("Connection Error", "Could not reach VoicePrint server daemon at 127.0.0.1:8765", "error");
+      showToast("Connection Error", `Could not reach VoicePrint server daemon at ${window.location.origin}`, "error");
     }
   }
 

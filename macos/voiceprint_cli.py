@@ -46,31 +46,59 @@ def notify_macos(title: str, subtitle: str, message: str) -> None:
     subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
 
 
+def _resolve_voiceprint_port() -> str | None:
+    """Return port only if a verified VoicePrint daemon responds at /api/health."""
+    candidates: list[str] = []
+    if os.environ.get("PORT"):
+        candidates.append(os.environ["PORT"].strip())
+    port_file = Path.home() / "Library" / "Application Support" / "VoicePrint" / "server_port.txt"
+    if port_file.is_file():
+        saved = port_file.read_text(encoding="utf-8").strip()
+        if saved.isdigit():
+            candidates.append(saved)
+    candidates.append("18940")
+
+    seen: set[str] = set()
+    for port in candidates:
+        if not port or port in seen:
+            continue
+        seen.add(port)
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=0.6) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, dict) and data.get("app") == "voiceprint":
+                    return port
+        except Exception:
+            continue
+    return None
+
+
 def rewrite_via_server_or_local(
     text: str,
     context_mode: str | None = None,
     intensity: str | None = None,
 ) -> dict:
-    """Use running VoicePrint daemon if reachable, otherwise invoke the local engine directly."""
-    port = os.environ.get("PORT", "8765")
-    url = f"http://127.0.0.1:{port}/api/rewrite"
-    payload = {"text": text, "auto_copy": False}
-    if context_mode:
-        payload["context_mode"] = context_mode
-    if intensity:
-        payload["intensity"] = intensity
-
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=2.5) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, ValueError):
-        return rewrite_text(text, context_mode=context_mode, intensity=intensity, save_history=True)
+    """Use running VoicePrint daemon if verified, otherwise invoke the local engine directly."""
+    port = _resolve_voiceprint_port()
+    if port:
+        url = f"http://127.0.0.1:{port}/api/rewrite"
+        payload = {"text": text, "auto_copy": False}
+        if context_mode:
+            payload["context_mode"] = context_mode
+        if intensity:
+            payload["intensity"] = intensity
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=2.5) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, ValueError):
+            pass
+    return rewrite_text(text, context_mode=context_mode, intensity=intensity, save_history=True)
 
 
 def main() -> int:

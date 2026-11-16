@@ -29,6 +29,11 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "pangram_api_key": "",
     "pangram_model": "pangram-4",
     "pangram_public_link": "false",
+    "inspector_engine": "inhouse",
+    "openrouter_api_key": "",
+    "openrouter_base_url": "https://openrouter.ai/api/v1",
+    "ai_detect_regen_models": "meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash",
+    "ai_detect_arbiter_model": "google/gemini-2.5-flash",
 }
 
 
@@ -128,6 +133,12 @@ def init_db(db_path: Path | None = None) -> None:
                 fraction_human REAL NOT NULL DEFAULT 0.0,
                 max_humanizer_score REAL NOT NULL DEFAULT 0.0,
                 dashboard_link TEXT NOT NULL DEFAULT '',
+                result_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ai_detector_cache (
+                cache_key TEXT PRIMARY KEY,
                 result_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
@@ -529,6 +540,44 @@ def delete_pangram_scan(scan_id: int, db_path: Path | None = None) -> bool:
         cur = conn.execute("DELETE FROM pangram_scans WHERE id = ?", (scan_id,))
         conn.commit()
         return cur.rowcount > 0
+
+
+def get_cached_ai_detection(cache_key: str, db_path: Path | None = None) -> dict[str, Any] | None:
+    """Retrieve a SHA-256 cached AI detector report if present."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT result_json FROM ai_detector_cache WHERE cache_key = ?",
+            (cache_key,),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            data = json.loads(row["result_json"])
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+
+def set_cached_ai_detection(
+    cache_key: str,
+    result_payload: dict[str, Any],
+    db_path: Path | None = None,
+) -> None:
+    """Persist an AI detector report keyed by SHA-256 content + model config hash."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO ai_detector_cache (cache_key, result_json, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                result_json = excluded.result_json,
+                created_at = excluded.created_at
+            """,
+            (cache_key, json.dumps(result_payload), utc_now()),
+        )
+        conn.commit()
 
 
 def seed_demo_samples(db_path: Path | None = None) -> dict[str, int]:

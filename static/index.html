@@ -87,6 +87,12 @@
       </div>
 
       <div class="header-right">
+        <!-- Update button -->
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-check-update" title="Check GitHub for VoicePrint updates">
+          <span class="update-dot" id="update-btn-dot" style="display: none;"></span>
+          <span id="update-btn-label">v1.2.0 · Update</span>
+        </button>
+
         <!-- Settings button -->
         <button type="button" class="btn btn-secondary btn-icon" id="btn-open-settings" title="AI Engine & API Keys Configuration">
           <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
@@ -920,7 +926,7 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                   <span>HTTP Server Online</span>
                 </div>
                 <div class="daemon-meta">
-                  <span>Endpoint: <code>http://127.0.0.1:8765</code></span>
+                  <span>Endpoint: <code id="daemon-endpoint-url"></code></span>
                   <span class="meta-sep">•</span>
                   <span>Zero-inference local fallback: <strong class="text-emerald">Active</strong></span>
                 </div>
@@ -948,12 +954,20 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                 </span>
                 <div>
                   <h2 class="card-title">AI &amp; Originality Inspector</h2>
-                  <p class="card-subtitle">Enterprise-grade multi-window AI &amp; humanizer detection via Pangram Labs ($0.05 / 100 words PAYG)</p>
+                  <p class="card-subtitle" id="inspector-subtitle">In-House 3-Stage Ensemble: Forensic Stylometrics, DNA-GPT Perplexity, and Dual-Persona Arbiter</p>
                 </div>
               </div>
 
               <!-- Top Action Bar -->
               <div class="inspector-action-bar">
+                <div class="inspector-engine-selector-wrap">
+                  <label for="inspector-engine-select" class="form-label-inline font-semibold">Engine:</label>
+                  <select id="inspector-engine-select" class="form-select form-select-sm inspector-engine-select">
+                    <option value="inhouse" selected>In-House 3-Stage Ensemble (Forensics + DNA-GPT + Arbiter · &lt;$0.001/1kw)</option>
+                    <option value="pangram">Pangram Labs API (pangram-4 · $0.50/1kw)</option>
+                  </select>
+                </div>
+
                 <button type="button" class="btn btn-secondary btn-sm" id="btn-inspector-clipboard" title="Paste text from macOS clipboard">
                   <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
                     <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/>
@@ -963,12 +977,12 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                 </button>
 
                 <!-- Hidden file input for file upload -->
-                <input type="file" id="file-inspector-upload" accept=".docx,.pdf,.rtf,.txt" style="display: none;">
-                <button type="button" class="btn btn-secondary btn-sm" id="btn-inspector-upload" title="Upload .docx, .pdf, .rtf, or .txt file">
+                <input type="file" id="file-inspector-upload" accept=".docx,.rtf,.txt,.md,.pdf" style="display: none;">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-inspector-upload" title="Upload .docx, .rtf, .txt, .md, or .pdf file">
                   <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
                     <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
                   </svg>
-                  <span>Upload File (.docx, .pdf, .rtf, .txt)</span>
+                  <span>Upload File (.docx, .rtf, .txt, .md, .pdf)</span>
                 </button>
 
                 <button type="button" class="btn btn-secondary btn-sm" id="btn-inspector-sample" title="Load sample text with mixed AI & Humanizer patterns">
@@ -1001,9 +1015,9 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                     <span id="inspector-readiness-pill" class="inspector-pill-readiness pill-warning">Requires ≥50 chars</span>
                   </div>
                   <div class="inspector-meta-right">
-                    <span class="cost-estimator-label">PAYG Rate: <span class="text-muted">$0.05 / 100w</span></span>
+                    <span class="cost-estimator-label" id="inspector-cost-rate-label">Rate: <span class="text-muted">&lt;$0.001 / 1kw (~$0.0005)</span></span>
                     <span class="meta-sep">•</span>
-                    <span id="inspector-cost-est" class="inspector-cost-pill font-mono">Est. ~$0.00 USD</span>
+                    <span id="inspector-cost-est" class="inspector-cost-pill font-mono">Est. ~$0.0005 USD</span>
                   </div>
                 </div>
               </div>
@@ -1011,7 +1025,7 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
               <!-- Controls Row -->
               <div class="inspector-controls-row">
                 <div class="inspector-controls-left">
-                  <div class="form-group-inline">
+                  <div class="form-group-inline" id="wrap-pangram-model" style="display: none;">
                     <label for="inspector-model-select" class="form-label-inline">Model:</label>
                     <select id="inspector-model-select" class="form-select form-select-sm">
                       <option value="pangram-4">pangram-4 (Multi-Signal &amp; Humanizer)</option>
@@ -1019,7 +1033,7 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                     </select>
                   </div>
 
-                  <label class="checkbox-label" for="inspector-shareable-link" title="Creates a public dashboard link on Pangram Labs servers for 3rd-party verification">
+                  <label class="checkbox-label" for="inspector-shareable-link" id="wrap-pangram-link" style="display: none;" title="Creates a public dashboard link on Pangram Labs servers for 3rd-party verification">
                     <input type="checkbox" id="inspector-shareable-link">
                     <span>Shareable Pangram Link</span>
                   </label>
@@ -1046,7 +1060,7 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                     <svg viewBox="0 0 20 20" fill="currentColor" class="btn-icon">
                       <path fill-rule="evenodd" d="M10 1.944A11.954 11.954 0 012.166 5C2.056 5.649 2 6.319 2 7c0 5.225 3.34 9.67 8 11.317C14.66 16.67 18 12.225 18 7c0-.682-.057-1.35-.166-2.001A11.954 11.954 0 0110 1.944zM11 14a1 1 0 11-2 0 1 1 0 012 0zm0-7a1 1 0 10-2 0v3a1 1 0 102 0V7z" clip-rule="evenodd"/>
                     </svg>
-                    <span>Scan with Pangram 4</span>
+                    <span id="btn-run-scan-text">Scan with In-House 3-Stage Detector</span>
                   </button>
                 </div>
               </div>
@@ -1120,6 +1134,48 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                 </div>
               </div>
 
+              <!-- Short-Text Warning Banner (<300 words) -->
+              <div id="inspector-low-word-banner" class="inspector-warning-banner" style="display: none;">
+                <svg viewBox="0 0 20 20" fill="currentColor" class="warning-banner-icon">
+                  <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+                <div class="warning-banner-text">
+                  <strong>Short-Text Warning (&lt; 300 words):</strong> Document sample size is low (&lt;300 words). Authorship confidence intervals have been clamped conservatively to minimize false positives on brief submissions.
+                </div>
+              </div>
+
+              <!-- Turnitin-Style 1%-19%* Low-Confidence Banner -->
+              <div id="inspector-low-conf-banner" class="inspector-warning-banner banner-low-conf" style="display: none;">
+                <svg viewBox="0 0 20 20" fill="currentColor" class="warning-banner-icon">
+                  <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                </svg>
+                <div class="warning-banner-text">
+                  <strong>Low-Confidence Indicator (1%–19%*):</strong> Scores in this range reflect weak or borderline statistical significance. Under Turnitin academic integrity guidelines, scores below 20% should not be used as sole proof of generative AI usage.
+                </div>
+              </div>
+
+              <!-- 3-Stage Ensemble Telemetry Bar -->
+              <div id="inspector-ensemble-bar" class="inspector-ensemble-telemetry-bar" style="display: none;">
+                <div class="ensemble-telemetry-left">
+                  <span class="telemetry-chip font-mono">
+                    <span class="telemetry-label">Stage 1 Stylometrics:</span>
+                    <strong id="telemetry-stage1-val" class="telemetry-val text-amber">--%</strong>
+                  </span>
+                  <span class="telemetry-chip font-mono">
+                    <span class="telemetry-label">Stage 2 DNA-GPT:</span>
+                    <strong id="telemetry-stage2-val" class="telemetry-val text-indigo">--</strong>
+                  </span>
+                  <span class="telemetry-chip font-mono">
+                    <span class="telemetry-label">Stage 3 Arbiter:</span>
+                    <strong id="telemetry-stage3-val" class="telemetry-val text-rose">--%</strong>
+                  </span>
+                </div>
+                <div class="ensemble-telemetry-right">
+                  <span id="telemetry-cache-pill" class="badge-cache-miss font-mono">Live Run</span>
+                  <span id="telemetry-cost-pill" class="badge-telemetry-cost font-mono">&lt;$0.001 / 1kw</span>
+                </div>
+              </div>
+
               <!-- 3-Segment Stacked Meter -->
               <div class="meter-wrapper">
                 <div class="meter-labels-row">
@@ -1166,7 +1222,7 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                 <div class="card-header">
                   <div class="card-title-group">
                     <h4 class="card-title">Highlighted Submission &amp; Window Segments</h4>
-                    <span class="card-subtitle">Visual classification per text window</span>
+                    <span class="card-subtitle">Visual classification per text window — click or hover any segment for forensic telemetry</span>
                   </div>
                   <div class="legend-pills">
                     <span class="legend-pill pill-ai"><span class="legend-dot bg-rose"></span> AI</span>
@@ -1177,6 +1233,8 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                 </div>
                 <div class="card-body">
                   <div id="inspector-highlighted-text" class="highlighted-text-container font-mono"></div>
+                  <!-- Inspection Detail Card (interactive window tooltip/panel) -->
+                  <div id="inspector-window-tooltip" class="inspector-detail-card" style="display: none;"></div>
                 </div>
               </div>
 
@@ -1218,8 +1276,8 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                   </svg>
                 </span>
                 <div>
-                  <h3 class="card-title">Saved Pangram Scan History</h3>
-                  <p class="card-subtitle">Past scans saved in local SQLite — load any prior result instantly at $0 cost</p>
+                  <h3 class="card-title">Saved AI Scan History</h3>
+                  <p class="card-subtitle">Past in-house and Pangram scans saved in local SQLite — load any prior result instantly at $0 cost</p>
                 </div>
               </div>
               <span id="inspector-history-count" class="badge-neutral text-xs">0 scans saved</span>
@@ -1239,7 +1297,7 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
                   </thead>
                   <tbody id="inspector-history-tbody">
                     <tr>
-                      <td colspan="6" class="text-center text-muted" style="padding: 24px;">No saved Pangram scans yet. Run a scan to build history.</td>
+                      <td colspan="6" class="text-center text-muted" style="padding: 24px;">No saved AI scans yet. Run a scan to build history.</td>
                     </tr>
                   </tbody>
                 </table>
@@ -1608,6 +1666,47 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
               </div>
             </div>
 
+            <!-- OpenRouter Card (In-House 3-Stage AI Detector — <$0.001 / 1k words) -->
+            <div class="provider-config-card" id="card-setting-openrouter">
+              <div class="provider-card-head">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span class="provider-card-name">OpenRouter — In-House 3-Stage AI Detector</span>
+                  <span class="text-xs text-muted">(&lt;$0.001 / 1k words)</span>
+                </div>
+                <span class="provider-status-badge badge-unconfigured" id="badge-openrouter">Offline Stage-1 Only</span>
+              </div>
+              <p class="text-sm text-muted" style="margin-bottom: 10px;">
+                Powers Stage 2 (DNA-GPT Regeneration Perplexity) and Stage 3 (Dual-Persona Arbiter Synthesis) at &lt;$0.001/1k words. When omitted or offline, VoicePrint operates with zero API cost in Stage-1 Stylometric Forensics mode.
+              </p>
+              <div class="form-row form-grid-2">
+                <div class="form-group">
+                  <label for="setting-openrouter-key" class="form-label">OpenRouter API Key (<code>sk-or-v1-...</code>)</label>
+                  <div class="input-with-action">
+                    <input type="password" id="setting-openrouter-key" class="form-input" placeholder="sk-or-v1-... (optional — enables Stage 2 DNA-GPT &amp; Stage 3 Arbiter)" autocomplete="off">
+                    <button type="button" class="btn btn-ghost btn-sm text-rose" id="btn-clear-openrouter" title="Clear saved OpenRouter key">Clear</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btn-test-openrouter" title="Verify OpenRouter key and connectivity">Test Key</button>
+                  </div>
+                  <span class="field-hint">Key is saved securely in local SQLite and only sent directly to OpenRouter.</span>
+                </div>
+                <div class="form-group">
+                  <label for="setting-openrouter-url" class="form-label">OpenRouter Base URL</label>
+                  <input type="text" id="setting-openrouter-url" class="form-input" placeholder="https://openrouter.ai/api/v1">
+                </div>
+              </div>
+              <div class="form-row form-grid-2" style="margin-top: 10px;">
+                <div class="form-group">
+                  <label for="setting-regen-models" class="form-label">Stage 2 Regeneration Models (CSV)</label>
+                  <input type="text" id="setting-regen-models" class="form-input" placeholder="meta-llama/llama-3.3-70b-instruct,google/gemini-2.5-flash">
+                  <span class="field-hint">Comma-separated models used for DNA-GPT perplexity calibration.</span>
+                </div>
+                <div class="form-group">
+                  <label for="setting-arbiter-model" class="form-label">Stage 3 Arbiter Model</label>
+                  <input type="text" id="setting-arbiter-model" class="form-input" placeholder="google/gemini-2.5-flash">
+                  <span class="field-hint">Dual-persona synthesis arbiter model.</span>
+                </div>
+              </div>
+            </div>
+
             <!-- Pangram Labs Card (AI & Plagiarism Inspector — Pay-As-You-Go) -->
             <div class="provider-config-card" id="card-setting-pangram">
               <div class="provider-card-head">
@@ -1651,6 +1750,52 @@ python3 /Users/simonmakin/.gemini/antigravity/scratch/voiceprint/macos/voiceprin
               <button type="submit" class="btn btn-primary" id="btn-save-settings">Save Settings</button>
             </div>
           </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- In-App Update Modal -->
+    <div class="modal-backdrop" id="modal-update-backdrop" style="display: none;">
+      <div class="modal-dialog modal-dialog-sm" role="dialog" aria-labelledby="update-modal-title">
+        <div class="modal-header">
+          <div class="card-title-group">
+            <span class="card-icon-pill pill-indigo">
+              <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
+              </svg>
+            </span>
+            <div>
+              <h3 class="modal-title" id="update-modal-title">VoicePrint Updater</h3>
+              <p class="modal-subtitle">Pulls the latest GitHub release and restarts in-place</p>
+            </div>
+          </div>
+          <button type="button" class="btn-close" id="btn-close-update" aria-label="Close Updater">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="update-version-grid">
+            <div class="update-ver-box">
+              <span class="form-label">Current Version</span>
+              <strong class="font-mono" id="update-current-ver">v1.2.0</strong>
+            </div>
+            <div class="update-ver-box">
+              <span class="form-label">Latest GitHub Release</span>
+              <strong class="font-mono" id="update-latest-ver">Checking...</strong>
+            </div>
+          </div>
+          <div class="update-status-banner" id="update-status-banner">Checking GitHub Releases...</div>
+          <div class="update-notes-box font-mono" id="update-notes-box" style="display: none;"></div>
+          <div class="local-guarantee-box mt-3">
+            <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 text-emerald">
+              <path fill-rule="evenodd" d="M10 1.944A11.954 11.954 0 012.166 5C2.056 5.649 2 6.319 2 7c0 5.225 3.34 9.67 8 11.317C14.66 16.67 18 12.225 18 7c0-.682-.057-1.35-.166-2.001A11.954 11.954 0 0110 1.944zM11 14a1 1 0 11-2 0 1 1 0 012 0zm0-7a1 1 0 10-2 0v3a1 1 0 102 0V7z" clip-rule="evenodd"/>
+            </svg>
+            <div>
+              <strong>Data Preserved:</strong> Your Voice DNA samples, learned rules, scan cache, and API keys stay untouched in your local database.
+            </div>
+          </div>
+          <div class="modal-footer mt-3">
+            <button type="button" class="btn btn-secondary" id="btn-recheck-update">Check Again</button>
+            <button type="button" class="btn btn-primary" id="btn-confirm-update" disabled>Install Update &amp; Restart</button>
+          </div>
         </div>
       </div>
     </div>

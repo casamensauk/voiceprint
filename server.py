@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import mimetypes
@@ -13,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+DEFAULT_PORT = 18940
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = PROJECT_ROOT / "static"
@@ -25,6 +28,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from engine.academic_coach import check_source_citations, coach_academic_draft  # noqa: E402
+from engine.ai_detector import InHouseDetectorError, analyze_text_for_ai, scan_file_inhouse  # noqa: E402
+from engine.ai_detector.dna_regeneration import OpenRouterError, test_openrouter_key  # noqa: E402
+from engine.ai_detector.orchestrator import resolve_openrouter_config  # noqa: E402
 from engine.analyzer import analyze_text  # noqa: E402
 from engine.db import (  # noqa: E402
     CONTEXT_MODES,
@@ -57,6 +63,8 @@ from engine.pangram_client import (  # noqa: E402
 )
 from engine.rewriter import rewrite_text  # noqa: E402
 from engine.style_dna import extract_voice_dna, learn_from_user_edit  # noqa: E402
+from engine.updater import UpdaterError, check_github_update, stage_and_apply_update  # noqa: E402
+from engine.version import APP_VERSION  # noqa: E402
 from macos.install_quick_action import install_quick_action  # noqa: E402
 
 
@@ -117,6 +125,7 @@ def build_state_payload(requested_mode: str | None = None) -> dict[str, Any]:
     gold_edits = sum(1 for s in all_samples if float(s.get("weight", 1.0)) > 1.5)
 
     return {
+        "app_version": APP_VERSION,
         "settings": settings,
         "active_context_mode": active_mode,
         "dna_by_mode": dna_by_mode,
@@ -239,9 +248,40 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
             self._send_download(DOWNLOADABLE_PACKAGES[path])
             return
 
+        if path == "/api/health":
+            self._send_json(
+                {
+                    "app": "voiceprint",
+                    "version": APP_VERSION,
+                    "ok": True,
+                    "port": self.server.server_port,
+                }
+            )
+            return
+
+        if path == "/api/update/check":
+            try:
+                self._send_json(check_github_update(current_version=APP_VERSION))
+            except UpdaterError as err:
+                self._send_json({"ok": False, "error": err.message}, status=err.status_code)
+            return
+
         if path == "/api/state":
             mode = (qs.get("mode") or [None])[0]
             self._send_json(build_state_payload(mode))
+            return
+
+        if path == "/api/ai-detector/test-key":
+            settings = get_settings()
+            override_key = (qs.get("api_key") or [""])[0]
+            override_url = (qs.get("base_url") or [""])[0]
+            cfg = resolve_openrouter_config(settings, override_api_key=override_key)
+            base_url = override_url.strip() or cfg["base_url"]
+            try:
+                res = test_openrouter_key(cfg["api_key"], base_url=base_url)
+                self._send_json(res)
+            except OpenRouterError as err:
+                self._send_json({"ok": False, "error": err.message}, status=err.status_code)
             return
 
         if path == "/api/clipboard":
@@ -454,6 +494,66 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
             self._send_json(coach_academic_draft(draft_text))
             return
 
+        if path == "/api/ai-detector/scan":
+            settings = get_settings()
+            text = str(body.get("text") or "")
+            use_or = bool(body.get("use_openrouter", True))
+            bypass_cache = bool(body.get("bypass_cache", False))
+            title = str(body.get("title") or "").strip() or (text.strip()[:52] + ("..." if len(text.strip()) > 52 else ""))
+            try:
+                res = analyze_text_for_ai(
+                    text,
+                    use_openrouter=use_or,
+                    override_api_key=str(body.get("api_key") or ""),
+                    bypass_cache=bypass_cache,
+                    scan_type="inhouse",
+                )
+                scan_id = _persist_pangram_result(res, title or "In-House Scan")
+                res["scan_id"] = scan_id
+                self._send_json({"result": res, "state": build_state_payload(settings.get("active_context_mode"))})
+            except InHouseDetectorError as err:
+                self._send_json({"error": err.message}, status=err.status_code)
+            return
+
+        if path == "/api/ai-detector/file":
+            settings = get_settings()
+            filename = str(body.get("filename") or "submission.txt")
+            b64 = str(body.get("content_base64") or "")
+            use_or = bool(body.get("use_openrouter", True))
+            try:
+                file_bytes = base64.b64decode(b64, validate=True)
+            except Exception:
+                self._send_json({"error": "Invalid base64 file content."}, status=400)
+                return
+            try:
+                res = scan_file_inhouse(
+                    filename,
+                    file_bytes,
+                    use_openrouter=use_or,
+                    override_api_key=str(body.get("api_key") or ""),
+                )
+                scan_id = _persist_pangram_result(res, Path(filename).name)
+                res["scan_id"] = scan_id
+                self._send_json({"result": res, "state": build_state_payload(settings.get("active_context_mode"))})
+            except InHouseDetectorError as err:
+                self._send_json({"error": err.message}, status=err.status_code)
+            return
+
+        if path == "/api/update/apply":
+            download_url = str(body.get("download_url") or "").strip()
+            try:
+                if not download_url:
+                    info = check_github_update(current_version=APP_VERSION)
+                    download_url = str(info.get("download_url") or "").strip()
+                    if not download_url:
+                        self._send_json({"ok": False, "error": "Latest GitHub release does not contain VoicePrint-macOS.zip."}, status=404)
+                        return
+                res = stage_and_apply_update(download_url=download_url, current_port=self.server.server_port)
+                self._send_json(res)
+            except UpdaterError as err:
+                self._send_json({"ok": False, "error": err.message}, status=err.status_code)
+            return
+
         self._send_json({"error": "Endpoint not found"}, status=404)
 
     def do_DELETE(self) -> None:  # noqa: N802
@@ -495,12 +595,40 @@ class VoicePrintHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "Endpoint not found"}, status=404)
 
 
-def run_server(host: str = "127.0.0.1", port: int | None = None) -> None:
-    """Start the threaded HTTP server."""
+def bind_server(
+    host: str = "127.0.0.1",
+    port: int | None = None,
+    auto_port: bool = False,
+) -> ThreadingHTTPServer:
+    """Bind ThreadingHTTPServer to the requested port or first free fallback port when auto_port=True."""
+    requested = port if port is not None else int(os.environ.get("PORT", str(DEFAULT_PORT)))
+    if not auto_port:
+        return ThreadingHTTPServer((host, requested), VoicePrintHandler)
+
+    for candidate in range(requested, requested + 50):
+        try:
+            return ThreadingHTTPServer((host, candidate), VoicePrintHandler)
+        except OSError:
+            continue
+    return ThreadingHTTPServer((host, 0), VoicePrintHandler)
+
+
+def run_server(
+    host: str = "127.0.0.1",
+    port: int | None = None,
+    auto_port: bool = False,
+) -> None:
+    """Start the threaded HTTP server and optionally record the bound port to VOICEPRINT_PORT_FILE."""
     init_db()
-    listen_port = port or int(os.environ.get("PORT", "8765"))
-    httpd = ThreadingHTTPServer((host, listen_port), VoicePrintHandler)
-    print(f"VoicePrint Studio running at http://{host}:{listen_port}", flush=True)
+    httpd = bind_server(host=host, port=port, auto_port=auto_port)
+    actual_port = httpd.server_port
+    port_file = os.environ.get("VOICEPRINT_PORT_FILE", "").strip()
+    if port_file:
+        p = Path(port_file)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(actual_port), encoding="utf-8")
+
+    print(f"VoicePrint Studio running at http://{host}:{actual_port}", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -510,4 +638,9 @@ def run_server(host: str = "127.0.0.1", port: int | None = None) -> None:
 
 
 if __name__ == "__main__":
-    run_server()
+    parser = argparse.ArgumentParser(description="VoicePrint Studio HTTP server")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--auto-port", action="store_true", help="Automatically fall back to a free localhost port if occupied")
+    args = parser.parse_args()
+    run_server(host=args.host, port=args.port, auto_port=args.auto_port)

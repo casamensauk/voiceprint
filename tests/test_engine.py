@@ -10,6 +10,8 @@ Covers:
 6. Pangram Labs client tests (cost estimation, async polling, validation, docx extraction).
 7. Academic Coach tests (source citation overlap checking and clarity diagnostics).
 8. HTTP Server API smoke tests (GET state, POST rewrite, seed demo, learn-edit, rules, academic & Pangram endpoints).
+9. In-House 3-Stage AI Writing Detector (preprocessor offsets, stylometrics, mocked 3-stage ensemble, calibrator asterisk, docx scan).
+10. Mac Studio dynamic port discovery and fallback server tests.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import sys
 import tempfile
 import threading
@@ -28,7 +31,7 @@ import zipfile
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 # Ensure voiceprint project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +41,17 @@ if str(PROJECT_ROOT) not in sys.path:
 from engine.academic_coach import (
     check_source_citations,
     coach_academic_draft,
+)
+from engine.ai_detector import (
+    InHouseDetectorError,
+    analyze_text_for_ai,
+    scan_file_inhouse,
+)
+from engine.ai_detector.calibrator import calibrate_report
+from engine.ai_detector.preprocessor import PreprocessedSegment, segment_document
+from engine.ai_detector.stylometrics import (
+    detect_unicode_and_homoglyphs,
+    score_window_stylometrics,
 )
 from engine.analyzer import (
     analyze_text,
@@ -70,7 +84,14 @@ from engine.pangram_client import (
 )
 from engine.rewriter import apply_deterministic_de_ai, rewrite_text
 from engine.style_dna import extract_voice_dna, learn_from_user_edit
-from server import VoicePrintHandler
+from engine.updater import (
+    UpdaterError,
+    check_github_update,
+    is_newer_version,
+    parse_semver,
+    stage_and_apply_update,
+)
+from server import VoicePrintHandler, bind_server
 
 
 class _MockHTTPResponse:
@@ -839,6 +860,333 @@ class TestHTTPServer(unittest.TestCase):
                 self.assertFalse(any(s["id"] == scan_id for s in scans_after))
         finally:
             update_settings({"pangram_api_key": "", "clear_pangram_api_key": True}, db_path=self.db_path)
+
+    def test_api_health_endpoint(self) -> None:
+        """GET /api/health returns HTTP 200 with {"app": "voiceprint", "ok": True, ...}."""
+        status, _, body = self._get("/api/health")
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(data.get("app"), "voiceprint")
+        self.assertTrue(data.get("ok"))
+        self.assertEqual(data.get("port"), self.port)
+        self.assertIn("version", data)
+
+    def test_post_ai_detector_scan_offline(self) -> None:
+        """POST /api/ai-detector/scan with use_openrouter: False returns 200 and persists in pangram_scans."""
+        payload = {
+            "text": "This is a comprehensive evaluation submission designed to test the in-house offline detection engine.",
+            "title": "Offline In-House AI Scan Test",
+            "use_openrouter": False,
+        }
+        status, _, body = self._post("/api/ai-detector/scan", payload)
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode("utf-8"))
+        self.assertIn("result", data)
+        res = data["result"]
+        self.assertIn("fraction_ai", res)
+        self.assertIn("fraction_ai_assisted", res)
+        self.assertIn("fraction_human", res)
+        self.assertIn("windows", res)
+        scan_id = res.get("scan_id")
+        self.assertIsNotNone(scan_id)
+
+        scans_in_db = get_pangram_scans(db_path=self.db_path)
+        self.assertTrue(any(s["id"] == scan_id for s in scans_in_db))
+
+
+class TestPortDiscovery(unittest.TestCase):
+    """Test Mac Studio dynamic port discovery and fallback logic."""
+
+    def test_bind_server_falls_back_when_port_occupied(self) -> None:
+        """Bind dummy socket to port, verify bind_server falls back to next free port."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        occupied_port = sock.getsockname()[1]
+        try:
+            httpd = bind_server(host="127.0.0.1", port=occupied_port, auto_port=True)
+            try:
+                self.assertNotEqual(httpd.server_port, occupied_port)
+                self.assertGreater(httpd.server_port, 0)
+            finally:
+                httpd.server_close()
+        finally:
+            sock.close()
+
+    def test_api_health_endpoint(self) -> None:
+        """GET /api/health returns HTTP 200 with {"app": "voiceprint", "ok": True, ...}."""
+        httpd = bind_server(host="127.0.0.1", port=0, auto_port=False)
+        port = httpd.server_port
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/health", method="GET")
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(data.get("app"), "voiceprint")
+                self.assertTrue(data.get("ok"))
+                self.assertEqual(data.get("port"), port)
+                self.assertIn("version", data)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            t.join(timeout=2.0)
+
+
+class TestInHouseAiDetector(BaseEngineTestCase):
+    """Test the in-house 3-stage AI writing detector, forensics, and docx extraction."""
+
+    def test_preprocessor_offsets_and_reference_exclusion(self) -> None:
+        """Verify segment_document produces exact character offsets and marks references."""
+        essay = (
+            "Artificial intelligence in modern pedagogy represents a pivotal evolution in educational methods. "
+            "Researchers have observed marked differences in student engagement when adaptive learning systems are deployed. "
+            "Traditional instructional design often relied on rigid curricular structures that failed to accommodate diverse pacing.\n\n"
+            "By contrasting personalized feedback loops against standardized benchmarks, contemporary classrooms foster independent inquiry. "
+            "Empirical evaluations suggest measurable gains across critical thinking indicators when guided synthesis tools are incorporated.\n\n"
+            "References\n"
+            "Smith, J. (2024). Adaptive Frameworks in Digital Learning. Oxford Academic Press."
+        )
+        segments = segment_document(essay)
+        self.assertGreaterEqual(len(segments), 2)
+        for seg in segments:
+            self.assertEqual(essay[seg.start_index:seg.end_index], seg.text)
+
+        # Bibliography segment must be marked is_excluded_reference=True
+        ref_segs = [s for s in segments if s.is_excluded_reference]
+        self.assertEqual(len(ref_segs), 1)
+        self.assertIn("Smith, J. (2024)", ref_segs[0].text)
+        self.assertTrue(segments[-1].is_excluded_reference)
+
+        # Body segment must NOT be marked is_excluded_reference
+        body_segs = [s for s in segments if not s.is_excluded_reference]
+        self.assertGreaterEqual(len(body_segs), 1)
+        self.assertFalse(segments[0].is_excluded_reference)
+
+    def test_stylometrics_detects_ai_and_homoglyph_spoofing(self) -> None:
+        """Verify AI-cliché text yields high AI score, and homoglyphs/Unicode yield high humanizer score."""
+        ai_text = (
+            "We must delve into this intricate tapestry of digital tools to unlock value for teams. "
+            "Moreover we can seamlessly leverage each dynamic solution to foster collaboration across groups. "
+            "Furthermore we will meticulously curate the landscape to optimize every single workflow. "
+            "In addition we must strategically utilize our assets to maximize holistic organizational efficiency."
+        )
+        res_ai = score_window_stylometrics(ai_text)
+        self.assertGreaterEqual(res_ai["stylometric_ai_score"], 0.70)
+        self.assertGreaterEqual(res_ai["ai_lexicon_hits"], 2)
+
+        # Cyrillic 'е' in "tеst" (\u0435) and zero-width space (\u200b)
+        spoofed_text = "This is a normal paragraph to t\u0435st the evasion detector with invisible\u200b watermarks in the text."
+        res_sp = score_window_stylometrics(spoofed_text)
+        self.assertGreaterEqual(res_sp["homoglyph_count"], 1)
+        self.assertGreaterEqual(res_sp["unicode_anomaly_count"], 1)
+        self.assertGreaterEqual(res_sp["stylometric_humanizer_score"], 0.60)
+
+    def test_full_3stage_ensemble_mocked_and_cached(self) -> None:
+        """Mock Stage 2 and Stage 3 OpenRouter calls, verify ensemble mode, low word count, and cache hit."""
+        draft = (
+            "In the modern era of natural language processing, advanced deep learning models have revolutionized "
+            "automated text production across various domains. Many educational institutions have begun examining "
+            "the authenticity of student work with increased scrutiny. Furthermore, research indicates that stochastic "
+            "sequence generation yields identifiable statistical fingerprints. Consequently, linguistic analysts "
+            "examine sentence length variance and token probability distributions to distinguish synthetic prose."
+        )
+        word_count = len(draft.split())
+        self.assertLess(word_count, 300)
+        self.assertGreaterEqual(word_count, 40)
+
+        words = draft.split()
+        split_idx = max(10, int(len(words) * 0.50))
+        suffix = " ".join(words[split_idx:])
+
+        def fake_chat(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            resp_fmt = kwargs.get("response_format")
+            if resp_fmt is not None:
+                # Stage 3 arbiter structured output
+                return {
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps({
+                                "overall_summary": "High AI probability detected across windows.",
+                                "windows": [{
+                                    "window_index": 0,
+                                    "ai_score": 0.88,
+                                    "is_humanized": False,
+                                    "humanizer_score": 0.12,
+                                    "reasons": ["Elevated DNA BScore overlap", "Robotic cadence"],
+                                }],
+                            })
+                        }
+                    }],
+                    "usage": {"total_tokens": 150, "cost": 0.0002}
+                }
+            # Stage 2 continuation matching suffix
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": suffix,
+                    },
+                    "logprobs": {"content": [{"logprob": -0.2}]}
+                }],
+                "usage": {"total_tokens": 80, "cost": 0.0001}
+            }
+
+        mock_chat = MagicMock(side_effect=fake_chat)
+        with patch("engine.ai_detector.dna_regeneration.openrouter_chat_completion", mock_chat), \
+             patch("engine.ai_detector.arbiter.openrouter_chat_completion", mock_chat):
+            res = analyze_text_for_ai(draft, override_api_key="sk-or-test", db_path=self.db_path)
+
+            self.assertEqual(res["mode"], "ensemble_3_stage")
+            self.assertTrue(res["low_word_count_warning"])
+            self.assertFalse(res["cache_hit"])
+            self.assertGreaterEqual(len(res["windows"]), 1)
+            for win in res["windows"]:
+                self.assertEqual(draft[win["start_index"]:win["end_index"]], win["text"])
+
+            call_count_first_run = mock_chat.call_count
+            self.assertGreater(call_count_first_run, 0)
+
+            # Second call with identical inputs should hit cache and NOT call openrouter_chat_completion
+            res2 = analyze_text_for_ai(draft, override_api_key="sk-or-test", db_path=self.db_path)
+            self.assertTrue(res2["cache_hit"])
+            self.assertEqual(mock_chat.call_count, call_count_first_run)
+            self.assertEqual(res2["mode"], "ensemble_3_stage")
+            self.assertEqual(res2["fraction_ai"], res["fraction_ai"])
+
+    def test_calibrator_low_confidence_asterisk_and_offline_fallback(self) -> None:
+        """Verify offline mode runs with zero API cost, and 1%-19% AI triggers low_confidence_asterisk."""
+        draft = (
+            "Here is a sample text submitted for analysis without any external API calls. "
+            "It contains enough characters to meet the minimum character threshold easily."
+        )
+        res_offline = analyze_text_for_ai(draft, use_openrouter=False, db_path=self.db_path)
+        self.assertEqual(res_offline["mode"], "forensic_offline")
+        self.assertEqual(res_offline["ensemble_breakdown"]["api_cost_usd"], 0.0)
+        self.assertEqual(res_offline["ensemble_breakdown"]["api_tokens"], 0)
+        self.assertEqual(res_offline["estimate"]["estimated_cost_usd"], 0.0)
+
+        # Verify low_confidence_asterisk in calibrate_report
+        # Build 10 segments of 10 words each: 1 AI window (10%), 9 Human windows (90%)
+        segments = []
+        for i in range(10):
+            w_text = f"Window {i} text with enough words to form segment cleanly."
+            segments.append(
+                PreprocessedSegment(
+                    text=w_text,
+                    start_index=i * 60,
+                    end_index=i * 60 + len(w_text),
+                    word_count=10,
+                    sentence_count=1,
+                    is_excluded_reference=False,
+                    sentences=[],
+                )
+            )
+        stylometrics = {0: {"stylometric_ai_score": 0.85, "stylometric_humanizer_score": 0.0}}
+        for i in range(1, 10):
+            stylometrics[i] = {"stylometric_ai_score": 0.10, "stylometric_humanizer_score": 0.0}
+
+        report_asterisk = calibrate_report(
+            text="dummy text " * 100,
+            segments=segments,
+            stylometrics_by_idx=stylometrics,
+            dna_by_idx={},
+            arbiter_res={},
+            model_name="test-model",
+        )
+        self.assertAlmostEqual(report_asterisk.fraction_ai + report_asterisk.fraction_ai_assisted, 0.10, places=2)
+        self.assertTrue(report_asterisk.low_confidence_asterisk)
+        self.assertIn("10%*", report_asterisk.headline)
+        self.assertEqual(report_asterisk.prediction_short, "Low-Confidence")
+
+        # Verify outside 1%-19% does NOT trigger asterisk
+        stylometrics_all_human = {i: {"stylometric_ai_score": 0.05, "stylometric_humanizer_score": 0.0} for i in range(10)}
+        report_human = calibrate_report(
+            text="dummy text " * 100,
+            segments=segments,
+            stylometrics_by_idx=stylometrics_all_human,
+            dna_by_idx={},
+            arbiter_res={},
+            model_name="test-model",
+        )
+        self.assertFalse(report_human.low_confidence_asterisk)
+
+    def test_docx_inhouse_file_scan(self) -> None:
+        """scan_file_inhouse extracts text from in-memory .docx archive and scores offline."""
+        bio = io.BytesIO()
+        with zipfile.ZipFile(bio, "w") as zf:
+            xml = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                '<w:body><w:p><w:r><w:t>'
+                'This is an extracted academic essay from a docx archive that contains more than sixty characters.'
+                '</w:t></w:r></w:p></w:body></w:document>'
+            )
+            zf.writestr("word/document.xml", xml)
+        docx_bytes = bio.getvalue()
+
+        res = scan_file_inhouse("paper.docx", docx_bytes, use_openrouter=False, db_path=self.db_path)
+        self.assertEqual(res["filename"], "paper.docx")
+        self.assertEqual(res["scan_type"], "inhouse_file")
+        self.assertEqual(res["mode"], "forensic_offline")
+        self.assertIn("extracted academic essay", res["text"])
+        self.assertIn("fraction_ai", res)
+        self.assertIn("fraction_human", res)
+        self.assertGreaterEqual(len(res["windows"]), 1)
+
+
+class TestAutoUpdater(BaseEngineTestCase):
+    """Test GitHub release update checking, semver comparisons, and URL safety."""
+
+    def test_semver_parsing_and_comparison(self) -> None:
+        self.assertEqual(parse_semver("v1.2.0"), (1, 2, 0))
+        self.assertTrue(is_newer_version("v1.3.0", "1.2.0"))
+        self.assertTrue(is_newer_version("v1.10.0", "1.2.0"))
+        self.assertFalse(is_newer_version("v1.2.0", "1.2.0"))
+        self.assertFalse(is_newer_version("v1.1.9", "1.2.0"))
+
+    def test_check_github_update_mocked_and_http_route(self) -> None:
+        fake_release = {
+            "tag_name": "v1.3.0",
+            "html_url": "https://github.com/casamensauk/voiceprint/releases/tag/v1.3.0",
+            "body": "Adds new voice styles.",
+            "published_at": "2026-11-16T09:00:00Z",
+            "assets": [
+                {
+                    "name": "VoicePrint-macOS.zip",
+                    "browser_download_url": "https://github.com/casamensauk/voiceprint/releases/download/v1.3.0/VoicePrint-macOS.zip",
+                }
+            ],
+        }
+        with patch("engine.updater.urllib.request.urlopen", return_value=_MockHTTPResponse(fake_release)):
+            info = check_github_update(current_version="1.2.0")
+            self.assertTrue(info["ok"])
+            self.assertTrue(info["update_available"])
+            self.assertEqual(info["latest_version"], "1.3.0")
+            self.assertIn("VoicePrint-macOS.zip", info["download_url"])
+
+        with patch("server.check_github_update", return_value=info):
+            httpd = bind_server(host="127.0.0.1", port=0, auto_port=False)
+            port = httpd.server_port
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            try:
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/api/update/check", method="GET")
+                with urllib.request.urlopen(req) as resp:
+                    self.assertEqual(resp.status, 200)
+                    data = json.loads(resp.read().decode("utf-8"))
+                    self.assertTrue(data["update_available"])
+                    self.assertEqual(data["latest_version"], "1.3.0")
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                t.join(timeout=2.0)
+
+    def test_stage_and_apply_rejects_untrusted_url(self) -> None:
+        with self.assertRaises(UpdaterError) as ctx:
+            stage_and_apply_update("https://evil.example.com/VoicePrint-macOS.zip", current_port=18940)
+        self.assertEqual(ctx.exception.status_code, 400)
 
 
 if __name__ == "__main__":

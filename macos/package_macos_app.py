@@ -168,31 +168,93 @@ export LC_CTYPE="${LC_CTYPE:-UTF-8}"
 APP_ROOT="$(cd "$(dirname "$0")/../Resources/app" && pwd)"
 APP_SUPPORT="$HOME/Library/Application Support/VoicePrint"
 LOG_DIR="$HOME/Library/Logs"
+PORT_FILE="$APP_SUPPORT/server_port.txt"
+LOG_FILE="$LOG_DIR/VoicePrint.log"
 mkdir -p "$APP_SUPPORT" "$LOG_DIR"
 
 export VOICEPRINT_DB_PATH="$APP_SUPPORT/voiceprint.db"
-if [ ! -f "$VOICEPRINT_DB_PATH" ] && [ -f "$APP_ROOT/data/voiceprint.db" ]; then
-    cp "$APP_ROOT/data/voiceprint.db" "$VOICEPRINT_DB_PATH"
-fi
+export VOICEPRINT_PORT_FILE="$PORT_FILE"
 
 PYTHON_BIN="$(command -v python3 || echo /usr/bin/python3)"
 "$PYTHON_BIN" "$APP_ROOT/macos/install_quick_action.py" >/dev/null 2>&1 || true
 
-if ! curl -sf --max-time 1 "http://127.0.0.1:8765/api/state" >/dev/null 2>&1; then
-    nohup "$PYTHON_BIN" "$APP_ROOT/server.py" >>"$LOG_DIR/VoicePrint.log" 2>&1 &
-    for _ in $(seq 1 30); do
-        if curl -sf --max-time 1 "http://127.0.0.1:8765/api/state" >/dev/null 2>&1; then
-            break
-        fi
-        sleep 0.1
-    done
+is_voiceprint_port() {
+    local port="$1"
+    curl -sf --max-time 1 "http://127.0.0.1:${port}/api/health" 2>/dev/null | grep -q '"voiceprint"'
+}
+
+# Reuse existing verified VoicePrint daemon if already running
+if [ -f "$PORT_FILE" ]; then
+    SAVED_PORT="$(tr -dc '0-9' < "$PORT_FILE" || true)"
+    if [ -n "$SAVED_PORT" ] && is_voiceprint_port "$SAVED_PORT"; then
+        open "http://127.0.0.1:${SAVED_PORT}"
+        exit 0
+    fi
 fi
 
-open "http://127.0.0.1:8765"
+# Also check default port 18940 in case started manually
+if is_voiceprint_port 18940; then
+    echo "18940" > "$PORT_FILE"
+    open "http://127.0.0.1:18940"
+    exit 0
+fi
+
+# Pick a guaranteed free localhost port starting at 18940
+FREE_PORT="$("$PYTHON_BIN" -c '
+import socket
+for p in range(18940, 18995):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", p))
+            print(p)
+            raise SystemExit(0)
+        except OSError:
+            continue
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.bind(("127.0.0.1", 0))
+    print(s.getsockname()[1])
+')"
+
+nohup "$PYTHON_BIN" "$APP_ROOT/server.py" --port "$FREE_PORT" --auto-port >>"$LOG_FILE" 2>&1 &
+
+READY=0
+for _ in $(seq 1 50); do
+    if [ -f "$PORT_FILE" ]; then
+        ACTIVE_PORT="$(tr -dc '0-9' < "$PORT_FILE" || true)"
+        if [ -n "$ACTIVE_PORT" ] && is_voiceprint_port "$ACTIVE_PORT"; then
+            READY=1
+            FREE_PORT="$ACTIVE_PORT"
+            break
+        fi
+    elif is_voiceprint_port "$FREE_PORT"; then
+        READY=1
+        echo "$FREE_PORT" > "$PORT_FILE"
+        break
+    fi
+    sleep 0.1
+done
+
+if [ "$READY" -eq 1 ]; then
+    open "http://127.0.0.1:${FREE_PORT}"
+    exit 0
+fi
+
+ERR_TAIL="$(tail -n 6 "$LOG_FILE" 2>/dev/null | tr '"' "'" | tr '\n' ' ')"
+osascript -e "display alert \"VoicePrint could not start\" message \"Check $LOG_FILE. Details: $ERR_TAIL\" as critical" >/dev/null 2>&1 || true
+exit 1
 """
     launcher.write_text(script, encoding="utf-8")
     os.chmod(launcher, 0o755)
     return launcher
+
+
+def _codesign_bundle(app_bundle: Path) -> None:
+    """Ad-hoc sign the app bundle so macOS Apple Silicon Gatekeeper validates it cleanly."""
+    subprocess.run(
+        ["/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(app_bundle)],
+        capture_output=True,
+        check=False,
+    )
 
 
 def package_macos() -> dict[str, str]:
@@ -213,8 +275,8 @@ def package_macos() -> dict[str, str]:
         "CFBundleName": "VoicePrint",
         "CFBundleDisplayName": "VoicePrint",
         "CFBundleIdentifier": "com.voiceprint.studio",
-        "CFBundleVersion": "1.1.0",
-        "CFBundleShortVersionString": "1.1.0",
+        "CFBundleVersion": "1.2.0",
+        "CFBundleShortVersionString": "1.2.0",
         "CFBundleExecutable": "VoicePrint",
         "CFBundleIconFile": "AppIcon",
         "CFBundlePackageType": "APPL",
@@ -229,6 +291,7 @@ def package_macos() -> dict[str, str]:
         _build_icns(resources_dir, work_dir)
         _copy_app_sources(app_root)
         _write_launcher_script(macos_dir)
+        _codesign_bundle(app_bundle)
 
         zip_path = DIST_DIR / ZIP_NAME
         if zip_path.exists():
