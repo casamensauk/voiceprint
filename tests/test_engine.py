@@ -83,7 +83,13 @@ from engine.pangram_client import (
     scan_file_pangram,
     scan_text_pangram,
 )
-from engine.rewriter import apply_deterministic_de_ai, rewrite_text
+from engine.ai_detector.stylometrics import _EXPLAINER_STOCK_RE, score_window_stylometrics
+from engine.rewriter import (
+    PLAIN_WORDING_SWAPS,
+    TARGET_HUMAN_SCORE,
+    apply_deterministic_de_ai,
+    rewrite_text,
+)
 from engine.style_dna import extract_voice_dna, learn_from_user_edit
 from engine.updater import (
     UpdaterError,
@@ -448,6 +454,112 @@ class TestRewriter(BaseEngineTestCase):
             self.assertGreaterEqual(or_res["after"]["human_score"], 80)
             insp = analyze_text_for_ai(or_res["rewritten"], use_openrouter=False, bypass_cache=True, db_path=self.db_path)
             self.assertEqual(insp["prediction_short"], "Human")
+
+
+DEAI_FIXTURE = (
+    "Instagram is perfect for showing off products visually. If you've got a lifestyle brand, like a clothing store, "
+    "a florist or a restaurant, you can post great photos and videos of what you sell.\n\n"
+    "You can also work with content creators on influencer partnerships. They can demo your products, which helps "
+    "build social proof and engagement.\n\n"
+    "Instagram's also good for reaching young adults, especially people 18 to 24. This younger crowd uses it a lot "
+    "to find new products."
+)
+_BAD_DRAFT = (
+    "Security: Gives teams a clear way to protect shared accounts and files every day. "
+    "Speed: Gives teams a quick way to finish routine jobs without extra steps. "
+    "Cost: Gives teams a lower bill each month than the older setup. "
+    "Support: Gives teams a named person to contact when something breaks."
+)
+_GOOD_DRAFT = (
+    "Honestly, I'd just keep the setup simple. Shared accounts get a password manager, and that's it. "
+    "Quick jobs? Automate them. The older tool cost more every month, so we dropped it and when something "
+    "breaks there's one person to call."
+)
+
+
+class TestDeAiRepairLoop(BaseEngineTestCase):
+    """Detector findings, deterministic repairs, and the score-driven LLM repair loop (LLM always stubbed)."""
+
+    def _rewrite(self, text: str, replies: list[Any], **settings: Any) -> tuple[dict[str, Any], MagicMock]:
+        update_settings(settings, db_path=self.db_path) if settings else None
+        stub = MagicMock(side_effect=[(r, "stub-llm") if r else (None, "local-dna-engine") for r in replies])
+        with patch("engine.rewriter._call_llm_provider", stub):
+            res = rewrite_text(text, context_mode="casual_chat", intensity="deep", save_history=False, db_path=self.db_path)
+        return res, stub
+
+    def test_two_sentence_paragraph_template_is_merged_in_order(self) -> None:
+        text = (
+            "Our shop opens at nine most days. People queue outside before then.\n\n"
+            "We sell bread and a few cakes. The sourdough goes first every morning.\n\n"
+            "Lunch is quieter than you'd think. Most regulars come back around four."
+        )
+        out = apply_deterministic_de_ai(text, "casual_chat", extract_voice_dna([]), [], intensity="deep", from_llm=True)
+        self.assertLess(len([p for p in out.split("\n\n") if p.strip()]), 3)
+        self.assertEqual(" ".join(out.split()), " ".join(text.split()))
+
+    def test_fixture_scores_ai_then_repairs_deterministically(self) -> None:
+        dna = extract_voice_dna([])
+        self.assertLess(analyze_text(DEAI_FIXTURE)["human_score"], 50)
+        out = apply_deterministic_de_ai(DEAI_FIXTURE, "casual_chat", dna, [], intensity="deep", from_llm=True)
+        self.assertGreaterEqual(analyze_text(out, dna)["human_score"], 70)
+        for fact in ("18 to 24", "florist", "restaurant"):
+            self.assertIn(fact, out)
+        self.assertNotRegex(out, r",\s+which\s+helps")
+        self.assertFalse(_EXPLAINER_STOCK_RE.search(out))
+        # subtle intensity leaves the text alone
+        subtle = apply_deterministic_de_ai(DEAI_FIXTURE, "casual_chat", dna, [], intensity="subtle", from_llm=True)
+        self.assertIn("content creators", subtle)
+
+    def test_plain_swaps_never_rematch_stock_regex(self) -> None:
+        for plain in PLAIN_WORDING_SWAPS.values():
+            self.assertFalse(_EXPLAINER_STOCK_RE.search(plain), plain)
+
+    def test_findings_report_matched_text(self) -> None:
+        res = score_window_stylometrics(DEAI_FIXTURE)
+        self.assertAlmostEqual(res["stylometric_ai_score"], 0.74, places=2)
+        by_reason = {f["reason"]: f["matches"] for f in res["findings"]}
+        stock = by_reason["Plain-English explainer stock phrases"]
+        for phrase in ("lifestyle brand", "content creators", "influencer partnerships", "social proof and engagement"):
+            self.assertIn(phrase, stock)
+        self.assertEqual(by_reason["Evaluative ', which [verb]s' clause"], [", which helps"])
+        self.assertEqual(by_reason["Symmetric 2-sentence-per-paragraph template"], [])
+
+    def test_loop_bad_then_good_returns_good(self) -> None:
+        res, stub = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT, _GOOD_DRAFT])
+        self.assertEqual(stub.call_count, 2)
+        self.assertEqual(res["repair_rounds"], 1)
+        self.assertIn("password manager", res["rewritten"])
+        self.assertGreaterEqual(res["after"]["human_score"], TARGET_HUMAN_SCORE)
+        # the revision request quotes the flagged text
+        revision_prompt = stub.call_args_list[1][0][3]
+        self.assertIn("Gives teams a", revision_prompt)
+
+    def test_loop_always_bad_is_capped_and_falls_back_to_floor(self) -> None:
+        res, stub = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT] * 5)
+        self.assertEqual(stub.call_count, 3)  # initial + default 2 repair rounds
+        self.assertEqual(res["repair_rounds"], 2)
+        self.assertEqual(res["provider_used"], "local-dna-engine (fallback)")
+        self.assertGreaterEqual(res["after"]["human_score"], TARGET_HUMAN_SCORE)
+
+    def test_zero_repair_rounds_makes_single_call(self) -> None:
+        res, stub = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT] * 5, rewrite_max_repair_rounds=0)
+        self.assertEqual(stub.call_count, 1)
+        self.assertEqual(res["repair_rounds"], 0)
+
+    def test_repair_rounds_clamped_to_three(self) -> None:
+        res, stub = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT] * 9, rewrite_max_repair_rounds=99)
+        self.assertEqual(stub.call_count, 4)
+        self.assertEqual(res["repair_rounds"], 3)
+
+    def test_provider_failure_stops_loop_early(self) -> None:
+        res, stub = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT, None])
+        self.assertEqual(stub.call_count, 2)
+        self.assertEqual(res["repair_rounds"], 0)
+
+    def test_floor_beats_worse_llm_draft(self) -> None:
+        res, _ = self._rewrite(_GOOD_DRAFT, [_BAD_DRAFT], rewrite_max_repair_rounds=0)
+        self.assertEqual(res["provider_used"], "local-dna-engine (fallback)")
+        self.assertIn("password manager", res["rewritten"])
 
 
 class TestGrowWithMeLearningLoop(BaseEngineTestCase):

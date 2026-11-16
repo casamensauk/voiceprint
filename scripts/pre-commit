@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Invoked by the global ~/.githooks dispatcher. Intentionally light.
+exit 0
