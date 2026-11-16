@@ -7,17 +7,19 @@ import unicodedata
 
 from .ai_detector.stylometrics import _HOMOGLYPH_CHARS
 
-_ZERO_WIDTH = set("​‌‍⁠﻿᠎­")
-_EXOTIC_SPACES = {" ", " ", " ", "　"} | {chr(c) for c in range(0x2000, 0x200B)}
-_BIDI = set("‎‏؜") | {chr(c) for c in range(0x202A, 0x202F)} | {chr(c) for c in range(0x2066, 0x206A)}
+_ZERO_WIDTH = set("\u200b\u200c\u200d\u2060\ufeff\u180e\u00ad")
+_EXOTIC_SPACES = {"\u00a0", "\u202f", "\u205f", "\u3000"} | {chr(c) for c in range(0x2000, 0x200B)}
+_BIDI = set("\u200e\u200f\u061c") | {chr(c) for c in range(0x202A, 0x202F)} | {chr(c) for c in range(0x2066, 0x206A)}
+_ZWJ = "\u200d"
+_VS16 = "\ufe0f"
 
-# Cyrillic/Greek look-alikes -> Latin equivalents (covers every char in the detector's list).
+# Cyrillic/Greek look-alikes -> Latin equivalents. Greek is limited to glyphs that are visually
+# identical to Latin; distinguishable letters (alpha, beta, mu...) are legitimate in scientific text.
 HOMOGLYPH_TO_LATIN: dict[str, str] = {
     "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i",
     "А": "A", "Е": "E", "О": "O", "Р": "P", "С": "C", "У": "Y", "Х": "X", "І": "I",
     "К": "K", "М": "M", "Н": "H", "Т": "T", "В": "B",
-    "α": "a", "β": "b", "γ": "y", "ε": "e", "ζ": "Z", "η": "n", "ι": "i", "κ": "k",
-    "μ": "u", "ν": "v", "ο": "o", "ρ": "p", "σ": "o", "τ": "t", "υ": "u", "χ": "x", "ω": "w",
+    "ο": "o", "ν": "v",
     "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M",
     "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T", "Χ": "X",
 }
@@ -66,9 +68,9 @@ def strip_hidden_characters(text: str) -> tuple[str, dict]:
     n = len(text)
     for i, ch in enumerate(text):
         cp = ord(ch)
-        if ch in ("‍", "️") and (
-            (i > 0 and (_is_emoji(text[i - 1]) or text[i - 1] in ("‍", "️")))
-            or (ch == "‍" and i + 1 < n and _is_emoji(text[i + 1]))
+        if ch in (_ZWJ, _VS16) and (
+            (i > 0 and (_is_emoji(text[i - 1]) or text[i - 1] in (_ZWJ, _VS16)))
+            or (ch == _ZWJ and i + 1 < n and _is_emoji(text[i + 1]))
         ):
             out.append(ch)
             continue

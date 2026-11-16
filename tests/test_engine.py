@@ -514,8 +514,11 @@ class TestHiddenCharacters(BaseEngineTestCase):
         self.assertEqual(cats["control_code"], 2)
 
     def test_homoglyph_in_latin_word_replaced_but_pure_cyrillic_kept(self) -> None:
-        out, rep = strip_hidden_characters("p\u0430ypal \u043f\u0440\u0438\u0432\u0435\u0442 \u03b1lpha")
-        self.assertEqual(out, "paypal \u043f\u0440\u0438\u0432\u0435\u0442 alpha")
+        out, rep = strip_hidden_characters("p\u0430ypal \u043f\u0440\u0438\u0432\u0435\u0442 all\u03bfy")
+        self.assertEqual(out, "paypal \u043f\u0440\u0438\u0432\u0435\u0442 alloy")
+        # Distinguishable Greek letters in scientific terms are left alone
+        science, _ = strip_hidden_characters("\u03b2-carotene at 5\u03bcm")
+        self.assertEqual(science, "\u03b2-carotene at 5\u03bcm")
         self.assertEqual(rep["replaced"], 2)
         self.assertEqual(rep["by_category"]["homoglyph"], 2)
         word, _ = strip_hidden_characters("\u043f\u0440\u043e\u0441\u0442\u043e")
