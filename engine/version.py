@@ -2,5 +2,5 @@
 
 from __future__ import annotations
 
-APP_VERSION = "1.2.7"
+APP_VERSION = "1.2.8"
 GITHUB_REPO = "casamensauk/voiceprint"

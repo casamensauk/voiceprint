@@ -705,3 +705,47 @@ def rewrite_text(
         "samples_referenced": len(top_samples),
         "hidden_characters": hidden,
     }
+
+
+def rewrite_with_model(
+    text: str,
+    model: str,
+    context_mode: str | None = None,
+    intensity: str | None = None,
+    db_path: Path | None = None,
+) -> dict[str, Any]:
+    """Rewrite once with one specific OpenRouter model. Never saves history, never falls back to local."""
+    cleaned = text.strip()
+    settings = dict(get_settings(db_path))
+    settings["openrouter_rewrite_model"] = model
+    mode = context_mode or settings.get("active_context_mode") or "casual_chat"
+    eff_intensity = intensity or settings.get("intensity") or "deep"
+
+    samples, learned_rules, edit_pairs = resolve_voice_corpus(mode, db_path=db_path)
+    dna = extract_voice_dna(samples, learned_rules)
+    top_samples = retrieve_similar_samples(cleaned, samples, top_k=6)
+    sys_prompt, usr_prompt = _build_llm_prompts(
+        cleaned, mode, eff_intensity, dna, learned_rules, top_samples, edit_pairs
+    )
+    llm_draft, provider_used = _call_llm_provider("openrouter", settings, sys_prompt, usr_prompt)
+    if not llm_draft:
+        return {"model": model, "rewritten": "", "error": "no response"}
+
+    rewritten = apply_deterministic_de_ai(
+        llm_draft,
+        context_mode=mode,
+        dna=dna,
+        learned_replacements=learned_rules,
+        intensity=eff_intensity,
+        from_llm=True,
+        original_text=cleaned,
+    )
+    rewritten, hidden = strip_hidden_characters(rewritten)
+    after = analyze_text(rewritten, dna)
+    return {
+        "model": model,
+        "rewritten": rewritten,
+        "provider_used": provider_used,
+        "hidden_characters": hidden,
+        "inhouse_human_score": after["human_score"],
+    }

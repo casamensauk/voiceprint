@@ -660,3 +660,28 @@ def get_jev_estimate(text_sha256: str, db_path: Path | None = None) -> dict[str,
     with get_connection(db_path) as conn:
         row = conn.execute("SELECT * FROM jev_estimates WHERE text_sha256 = ?", (text_sha256,)).fetchone()
     return dict(row) if row else None
+
+
+def persist_pangram_result(res: dict[str, Any], title: str, db_path: Path | None = None) -> int:
+    """Save a completed Pangram text, file, or plagiarism scan in SQLite."""
+    estimate = res.get("estimate") or {}
+    scan_type = str(res.get("scan_type") or "text")
+    headline = str(res.get("headline") or "")
+    if scan_type == "plagiarism" and not headline:
+        score_pct = int(round(float(res.get("plagiarism_score") or 0.0) * 100))
+        headline = f"Web Plagiarism: {score_pct}% ({len(res.get('matches') or [])} match(es))"
+    return add_pangram_scan(
+        scan_type=scan_type,
+        title=title,
+        input_text=str(res.get("text") or ""),
+        word_count=int(estimate.get("word_count") or len(str(res.get("text") or "").split())),
+        estimated_cost_usd=float(estimate.get("estimated_cost_usd") or 0.0),
+        headline=headline,
+        fraction_ai=float(res.get("fraction_ai") or 0.0),
+        fraction_ai_assisted=float(res.get("fraction_ai_assisted") or 0.0),
+        fraction_human=float(res.get("fraction_human") or 0.0),
+        max_humanizer_score=float(res.get("max_humanizer_score") or 0.0),
+        dashboard_link=str(res.get("dashboard_link") or ""),
+        result_payload=res,
+        db_path=db_path,
+    )
