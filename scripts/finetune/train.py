@@ -43,17 +43,20 @@ def compute_iters(train_examples: int, epochs: float, batch_size: int) -> int:
 
 
 def build_command(layout: common.Layout, model: str, iters: int, batch_size: int, adapter_dir: Path, trial: bool) -> list[str]:
-    """The `mlx_lm lora` command, run from the work dir (so `dataset` and `adapter*` are relative)."""
+    """The `mlx_lm lora` command, run from the work dir (so `dataset-rendered` and `adapter*` are relative).
+
+    Trains on the rendered text rows (see render_dataset.py), so no --mask-prompt: with a
+    thinking model its offset would hide the first words of every answer.
+    """
     return [
         str(layout.venv_python), "-m", "mlx_lm", "lora",
         "--model", model,
         "--train",
         "--fine-tune-type", "lora",
-        "--data", "dataset",
+        "--data", "dataset-rendered",
         "--adapter-path", adapter_dir.name,
         "--iters", str(iters),
         "--batch-size", str(batch_size),
-        "--mask-prompt",
         "--max-seq-length", str(MAX_SEQ_LENGTH),
         "--val-batches", "25",
         "--steps-per-eval", str(iters + 1 if trial else STEPS_PER_EVAL),
@@ -90,6 +93,14 @@ def parse_speed(log: str) -> dict:
 
 def _fmt_duration(seconds: float) -> str:
     return f"{int(seconds // 3600)}h{int(seconds % 3600 // 60):02d}m"
+
+
+def build_render_command(layout: common.Layout, model: str) -> list[str]:
+    """Render the chat dataset into generation-time text, inside the venv (needs the tokenizer)."""
+    return [
+        str(layout.venv_python), str(HERE / "render_dataset.py"),
+        "--model", model, "--src", str(layout.dataset), "--dst", str(layout.dataset_rendered),
+    ]
 
 
 def run_command(cmd: list[str], cwd: Path, log_path: Path | None = None) -> tuple[int, str]:
@@ -156,6 +167,11 @@ def main(argv: list[str] | None = None) -> int:
     if not n_train or not (layout.dataset / "train.jsonl").exists():
         print(f"No dataset at {layout.dataset}. Run prepare.py --run first.")
         return 1
+
+    code, _ = run_command(build_render_command(layout, args.model), cwd=layout.work)
+    if code:
+        print("Could not render the dataset for this model; nothing was trained.")
+        return code
 
     if args.trial:
         cmd = build_command(layout, args.model, TRIAL_ITERS, args.batch_size, layout.adapter_trial, trial=True)

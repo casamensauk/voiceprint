@@ -251,9 +251,9 @@ class TrainTests(Base):
         self.assertIn("huggingface.co", out)
         self.assertIn("6.8 GB", out)
         self.assertIn("Iterations: 1500", out)
-        self.assertIn("--mask-prompt", out)
+        self.assertNotIn("--mask-prompt", out)
         self.assertIn("--adapter-path adapter", out)
-        self.assertIn("--data dataset", out)
+        self.assertIn("--data dataset-rendered", out)
 
     def test_refuses_without_venv_or_dataset(self) -> None:
         with patch.object(train, "run_command", side_effect=AssertionError("no")):
@@ -297,9 +297,10 @@ class TrainTests(Base):
         with patch.object(train, "run_command", fake):
             code, out = run(train, ["--work-dir", str(self.work), "--trial"])
         self.assertEqual(code, 0)
-        self.assertIn("--iters", seen[0])
-        self.assertEqual(seen[0][seen[0].index("--iters") + 1], "40")
-        self.assertIn("adapter-trial", seen[0])
+        self.assertIn("render_dataset.py", seen[0][1])
+        self.assertIn("--iters", seen[1])
+        self.assertEqual(seen[1][seen[1].index("--iters") + 1], "40")
+        self.assertIn("adapter-trial", seen[1])
         self.assertIn("Estimate for the full run: 1500 iterations", out)
 
     def test_setup_is_idempotent(self) -> None:
@@ -413,6 +414,15 @@ class GenerateTests(Base):
     def test_parse_generated(self) -> None:
         self.assertEqual(generate.parse_generated("==========\nHello there\n==========\nPrompt: 3"), "Hello there")
         self.assertEqual(generate.parse_generated("just text"), "just text")
+        self.assertEqual(
+            generate.parse_generated("==========\n<|channel>thought\nplan plan\n<channel|>Real answer.\n=========="),
+            "Real answer.",
+        )
+        self.assertEqual(generate.parse_generated("==========\n<|channel>thought\nnever closed\n=========="), "")
+
+    def test_generate_command_switches_thinking_off(self) -> None:
+        cmd = generate.build_generate_command(common.Layout(Path("/tmp/x")), "m", None, 100, 0.7, 1)
+        self.assertEqual(json.loads(cmd[cmd.index("--chat-template-config") + 1]), {"enable_thinking": False})
 
     def test_placeholders_and_hidden_chars_cleaned(self) -> None:
         self.assertEqual(generate.clean_output("Hello​ world [link]"), "Hello world")
@@ -484,3 +494,56 @@ class ScanTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RenderDatasetTests(unittest.TestCase):
+    """render_dataset.py with a stand-in tokenizer shaped like a thinking model's template."""
+
+    class FakeTokenizer:
+        bos_token = "<bos>"
+
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False, enable_thinking=None):
+            out = "<bos>"
+            for m in messages:
+                role = "model" if m["role"] == "assistant" else m["role"]
+                out += f"<|turn>{role}\n{m['content']}<turn|>\n"
+            if add_generation_prompt:
+                out += "<|turn>model\n" + ("" if enable_thinking else "<|channel>thought\n<channel|>")
+            return out
+
+    def test_render_matches_generation_prompt_and_keeps_one_bos(self) -> None:
+        import render_dataset
+
+        msgs = [{"role": "user", "content": "Write it."}, {"role": "assistant", "content": "My answer."}]
+        body = "<|turn>user\nWrite it.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>My answer.<turn|>\n"
+        # Tokenizer whose encode() adds no BOS: the literal one stays.
+        self.assertEqual(render_dataset.render_example(self.FakeTokenizer(), msgs), "<bos>" + body)
+
+        class AddsBos(self.FakeTokenizer):
+            bos_token_id = 2
+
+            def encode(self, text):
+                return [2, 7]
+
+        # Tokenizer whose encode() adds BOS itself: the literal one is dropped.
+        self.assertEqual(render_dataset.render_example(AddsBos(), msgs), body)
+
+    def test_render_dir_writes_single_line_text_rows(self) -> None:
+        import render_dataset
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dst = Path(tmp) / "dataset", Path(tmp) / "dataset-rendered"
+            src.mkdir()
+            row = {"messages": [{"role": "user", "content": "Line one\nline two"}, {"role": "assistant", "content": "A\nB"}]}
+            (src / "train.jsonl").write_text(json.dumps(row) + "\n" + json.dumps(row) + "\n")
+            counts = render_dataset.render_dir(self.FakeTokenizer(), src, dst)
+            self.assertEqual(counts, {"train": 2})
+            lines = (dst / "train.jsonl").read_text().splitlines()
+            self.assertEqual(len(lines), 2)
+            self.assertIn("A\nB<turn|>", json.loads(lines[0])["text"])
+
+    def test_render_rejects_rows_without_an_answer(self) -> None:
+        import render_dataset
+
+        with self.assertRaises(ValueError):
+            render_dataset.render_example(self.FakeTokenizer(), [{"role": "user", "content": "x"}])
