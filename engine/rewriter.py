@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -23,10 +24,15 @@ from .db import (
     get_edit_pairs,
     get_learned_replacements,
     get_samples,
+    get_samples_signature,
     get_settings,
 )
 from .sanitize import strip_hidden_characters
-from .style_dna import extract_voice_dna, retrieve_similar_samples
+from .style_dna import (
+    RetrievalIndex,
+    build_retrieval_index,
+    extract_voice_dna,
+)
 
 # Extra casual / conversational swaps layered on top of HIGH_RISK_AI_WORDS
 CASUAL_UPGRADES: dict[str, str] = {
@@ -125,6 +131,143 @@ def resolve_voice_corpus(
     return mode_samples, mode_rules, mode_edits
 
 
+# ---------------------------------------------------------------------------
+# Placeholder hygiene (import masks private details as literal placeholders)
+# ---------------------------------------------------------------------------
+_PLACEHOLDER_KINDS = ("email", "link", "phone", "postcode", "number")
+_PLACEHOLDER_RE = re.compile(r"\[(?:" + "|".join(_PLACEHOLDER_KINDS) + r")\]", re.IGNORECASE)
+
+
+def _tidy_after_removal(text: str) -> str:
+    out = re.sub(r"\(\s*\)|\[\s*\]|\{\s*\}|<\s*>", "", text)
+    out = re.sub(r"([,;:])(?:\s*[,;:])+", r"\1", out)
+    out = re.sub(r"[ \t]+([,.;:!?])", r"\1", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"(?m)[ \t]+$", "", out)
+    out = re.sub(r"(?m)^[ \t]+(?=[,.;:!?])", "", out)
+    return out.strip()
+
+
+def strip_placeholders(text: str) -> str:
+    """Remove every import placeholder from text and tidy the leftovers."""
+    if not text or not _PLACEHOLDER_RE.search(text):
+        return text
+    return _tidy_after_removal(_PLACEHOLDER_RE.sub("", text))
+
+
+def strip_unrequested_placeholders(output: str, draft: str) -> str:
+    """Remove placeholders from output that the user's own draft did not contain."""
+    if not output or not _PLACEHOLDER_RE.search(output):
+        return output
+    in_draft = {m.group(0).lower() for m in _PLACEHOLDER_RE.finditer(draft or "")}
+    removed = False
+
+    def _sub(m: re.Match[str]) -> str:
+        nonlocal removed
+        if m.group(0).lower() in in_draft:
+            return m.group(0)
+        removed = True
+        return ""
+
+    out = _PLACEHOLDER_RE.sub(_sub, output)
+    return _tidy_after_removal(out) if removed else out
+
+
+# ---------------------------------------------------------------------------
+# Rewrite corpus: own-mode samples plus imported own writing, cached per process
+# ---------------------------------------------------------------------------
+IMPORTED_SOURCE_TYPES = ("gmail", "google_chat")
+_REWRITE_SAMPLE_LIMIT = 50_000
+_OWN_EXAMPLES = 3
+_TOTAL_EXAMPLES = 6
+_CORPUS_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+_CORPUS_CACHE_MAX = 8
+
+
+def clear_voice_cache() -> None:
+    _CORPUS_CACHE.clear()
+
+
+def _load_voice_pool(
+    mode: str, db_path: Path | None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return (dna_samples, own_samples, pool) using every stored sample (no 500 cap)."""
+    everything = get_samples(context_mode=None, limit=_REWRITE_SAMPLE_LIMIT, db_path=db_path)
+    own = sorted(
+        (s for s in everything if s.get("context_mode") == mode),
+        key=lambda s: (-float(s.get("weight", 1.0)), -int(s.get("id") or 0)),
+    )
+    others = [s for s in everything if s.get("context_mode") != mode]
+    imported = [s for s in others if s.get("source_type") in IMPORTED_SOURCE_TYPES]
+    pool = own + imported
+    if len(own) >= 3:
+        dna_samples = own
+    else:
+        dna_samples = list(own)
+        for s in others:
+            cross = dict(s)
+            cross["weight"] = round(float(s.get("weight", 1.0)) * 0.85, 3)
+            dna_samples.append(cross)
+        # Existing under-3 fallback: other modes' samples also serve as examples.
+        pool = dna_samples
+    return dna_samples, own, pool
+
+
+def resolve_voice_context(mode: str, db_path: Path | None = None) -> dict[str, Any]:
+    """Everything the rewrite path needs: cached DNA and retrieval index, fresh rules and edits."""
+    mode_rules = get_learned_replacements(context_mode=mode, db_path=db_path)
+    if not mode_rules:
+        mode_rules = get_learned_replacements(context_mode=None, db_path=db_path)
+    mode_edits = get_edit_pairs(context_mode=mode, limit=5, db_path=db_path)
+    if not mode_edits:
+        mode_edits = get_edit_pairs(context_mode=None, limit=5, db_path=db_path)
+
+    rules_key = tuple((r.get("avoid_text"), r.get("prefer_text")) for r in mode_rules)
+    scope = (str(db_path) if db_path else "", mode)
+    key = scope + (get_samples_signature(db_path), rules_key)
+    entry = _CORPUS_CACHE.get(key)
+    if entry is None:
+        dna_samples, own, pool = _load_voice_pool(mode, db_path)
+        entry = {
+            "dna": extract_voice_dna(dna_samples, mode_rules),
+            "pool": pool,
+            "index": build_retrieval_index(pool) if len(pool) > _TOTAL_EXAMPLES else None,
+        }
+        for old in [k for k in _CORPUS_CACHE if k[:2] == scope]:
+            del _CORPUS_CACHE[old]
+        while len(_CORPUS_CACHE) >= _CORPUS_CACHE_MAX:
+            _CORPUS_CACHE.pop(next(iter(_CORPUS_CACHE)))
+        _CORPUS_CACHE[key] = entry
+    return {
+        "dna": copy.deepcopy(entry["dna"]),
+        "pool": entry["pool"],
+        "index": entry["index"],
+        "rules": mode_rules,
+        "edits": mode_edits,
+    }
+
+
+def select_examples(
+    query: str, mode: str, pool: list[dict[str, Any]], index: RetrievalIndex | None
+) -> list[dict[str, Any]]:
+    """Best 3 of the mode's own samples, then best remaining from the whole pool, up to 6."""
+    if not pool:
+        return []
+    if index is not None:
+        ranked = index.rank(query)
+    else:
+        ranked = sorted(pool, key=lambda s: float(s.get("weight", 1.0)), reverse=True)
+    chosen = [s for s in ranked if s.get("context_mode") == mode][:_OWN_EXAMPLES]
+    chosen_ids = {id(s) for s in chosen}
+    for s in ranked:
+        if len(chosen) >= _TOTAL_EXAMPLES:
+            break
+        if id(s) not in chosen_ids:
+            chosen.append(s)
+            chosen_ids.add(id(s))
+    return chosen
+
+
 def _build_llm_prompts(
     text: str,
     context_mode: str,
@@ -145,13 +288,16 @@ def _build_llm_prompts(
 
     samples_block = ""
     if top_samples:
-        formatted = "\n---\n".join(s["content"].strip()[:400] for s in top_samples[:6])
+        formatted = "\n---\n".join(
+            strip_placeholders(s["content"].strip())[:400] for s in top_samples[:6]
+        )
         samples_block = f"\nAUTHENTIC WRITING SAMPLES FROM THIS USER ({context_mode} & personal voice — mirror this exact tone and rhythm):\n{formatted}"
 
     edits_block = ""
     if edit_pairs:
         pairs_txt = "\n".join(
-            f"Draft: {p['ai_draft'][:180]}\nUser's actual edit: {p['user_final_edit'][:180]}"
+            f"Draft: {strip_placeholders(p['ai_draft'])[:180]}\n"
+            f"User's actual edit: {strip_placeholders(p['user_final_edit'])[:180]}"
             for p in edit_pairs[:3]
         )
         edits_block = f"\nPAST CORRECTIONS SHOWING HOW THIS USER TWEAKS DRAFTS:\n{pairs_txt}"
@@ -642,9 +788,8 @@ def rewrite_text(
     mode = context_mode or settings.get("active_context_mode") or "casual_chat"
     eff_intensity = intensity or settings.get("intensity") or "deep"
 
-    samples, learned_rules, edit_pairs = resolve_voice_corpus(mode, db_path=db_path)
-
-    dna = extract_voice_dna(samples, learned_rules)
+    ctx = resolve_voice_context(mode, db_path=db_path)
+    learned_rules, edit_pairs, dna = ctx["rules"], ctx["edits"], ctx["dna"]
     before_analysis = analyze_text(cleaned, dna)
 
     if not cleaned:
@@ -661,7 +806,7 @@ def rewrite_text(
             "hidden_characters": {"removed": 0, "replaced": 0, "by_category": {}},
         }
 
-    top_samples = retrieve_similar_samples(cleaned, samples, top_k=6)
+    top_samples = select_examples(cleaned, mode, ctx["pool"], ctx["index"])
     sys_prompt, usr_prompt = _build_llm_prompts(
         cleaned, mode, eff_intensity, dna, learned_rules, top_samples, edit_pairs
     )
@@ -680,6 +825,7 @@ def rewrite_text(
         original_text=cleaned,
     )
     rewritten, hidden = strip_hidden_characters(rewritten)
+    rewritten = strip_unrequested_placeholders(rewritten, cleaned)
 
     after_analysis = analyze_text(rewritten, dna)
     if save_history:
@@ -721,9 +867,9 @@ def rewrite_with_model(
     mode = context_mode or settings.get("active_context_mode") or "casual_chat"
     eff_intensity = intensity or settings.get("intensity") or "deep"
 
-    samples, learned_rules, edit_pairs = resolve_voice_corpus(mode, db_path=db_path)
-    dna = extract_voice_dna(samples, learned_rules)
-    top_samples = retrieve_similar_samples(cleaned, samples, top_k=6)
+    ctx = resolve_voice_context(mode, db_path=db_path)
+    learned_rules, edit_pairs, dna = ctx["rules"], ctx["edits"], ctx["dna"]
+    top_samples = select_examples(cleaned, mode, ctx["pool"], ctx["index"])
     sys_prompt, usr_prompt = _build_llm_prompts(
         cleaned, mode, eff_intensity, dna, learned_rules, top_samples, edit_pairs
     )
@@ -741,6 +887,7 @@ def rewrite_with_model(
         original_text=cleaned,
     )
     rewritten, hidden = strip_hidden_characters(rewritten)
+    rewritten = strip_unrequested_placeholders(rewritten, cleaned)
     after = analyze_text(rewritten, dna)
     return {
         "model": model,

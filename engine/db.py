@@ -382,6 +382,17 @@ def get_samples(
         return [dict(r) for r in rows]
 
 
+def get_samples_signature(db_path: Path | None = None) -> tuple[int, int, float, float]:
+    """Cheap fingerprint of the samples table: changes when a sample is added, deleted or reweighted."""
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(SUM(weight), 0.0), "
+            "COALESCE(SUM(id * weight), 0.0) FROM samples"
+        ).fetchone()
+        return (int(row[0]), int(row[1]), round(float(row[2]), 6), round(float(row[3]), 6))
+
+
 def delete_sample(sample_id: int, db_path: Path | None = None) -> bool:
     """Delete a single sample by ID."""
     init_db(db_path)
