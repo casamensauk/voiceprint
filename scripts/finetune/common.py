@@ -91,14 +91,16 @@ def build_user_prompt(kind: str, words: int, notes: list[str]) -> str:
 # ---------------------------------------------------------------- content notes (local Ollama)
 
 
-def ollama_chat(model: str, prompt: str, url: str = OLLAMA_URL, timeout: float = 600.0) -> str:
+def ollama_chat(model: str, prompt: str, url: str = OLLAMA_URL, timeout: float = 180.0) -> str:
     """One non-streaming chat call to the LOCAL Ollama server. Patched out in tests."""
     body = json.dumps(
         {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
-            "options": {"temperature": 0.2},
+            # Thinking models (gemma4) otherwise reason for ~45 s before each short note.
+            "think": False,
+            "options": {"temperature": 0.2, "num_ctx": 8192},
         }
     ).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
