@@ -74,6 +74,9 @@ def load_drafts(files: list[Path], history_latest: int | None, db_path: Path | N
 
 # ---------------------------------------------------------------- mlx-lm
 
+# A thinking model may still open with a thought channel; never let it into an answer.
+_THOUGHT_RE = re.compile(r"<\|channel>thought.*?(?:<channel\|>|\Z)", re.DOTALL)
+
 
 def build_generate_command(
     layout: common.Layout, model: str, adapter: Path | None, max_tokens: int, temp: float, seed: int
@@ -87,6 +90,8 @@ def build_generate_command(
         "--temp", str(temp),
         "--seed", str(seed),
         "--verbose", "True",
+        # Thinking off: the prompt then ends exactly as the rendered training rows do.
+        "--chat-template-config", json.dumps({"enable_thinking": False}),
     ]
     if adapter is not None:
         cmd += ["--adapter-path", str(adapter)]
@@ -105,9 +110,8 @@ def parse_generated(stdout: str) -> str:
     """Take only the generated text: what sits between mlx-lm's two '==========' lines."""
     lines = stdout.splitlines()
     marks = [i for i, line in enumerate(lines) if line.strip() == "=" * 10]
-    if len(marks) >= 2:
-        return "\n".join(lines[marks[0] + 1 : marks[1]]).strip()
-    return stdout.strip()
+    text = "\n".join(lines[marks[0] + 1 : marks[1]]) if len(marks) >= 2 else stdout
+    return _THOUGHT_RE.sub("", text).strip()
 
 
 # ---------------------------------------------------------------- metrics

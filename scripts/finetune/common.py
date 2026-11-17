@@ -70,6 +70,7 @@ class Layout:
     def __init__(self, work_dir: Path | None = None) -> None:
         self.work = Path(work_dir) if work_dir else DEFAULT_WORK_DIR
         self.dataset = self.work / "dataset"
+        self.dataset_rendered = self.work / "dataset-rendered"
         self.notes = self.work / "notes.jsonl"
         self.venv = self.work / ".venv"
         self.venv_python = self.venv / "bin" / "python"
