@@ -261,51 +261,66 @@ def _ngrams_and_words(text: str) -> Counter[str]:
     return feats
 
 
+class RetrievalIndex:
+    """Precomputed TF-IDF vectors for a fixed sample list (reusable across queries)."""
+
+    def __init__(self, samples: list[dict[str, Any]]) -> None:
+        self.samples = samples
+        docs = [_ngrams_and_words(s["content"]) for s in samples]
+        df: Counter[str] = Counter()
+        for doc in docs:
+            for term in doc.keys():
+                df[term] += 1
+        self.n_docs = len(docs)
+        self.df = df
+        self.vectors: list[dict[str, float]] = []
+        self.norms: list[float] = []
+        self.word_counts: list[int] = []
+        for sample, doc in zip(samples, docs):
+            vec = {t: cnt * self._idf(t) for t, cnt in doc.items()}
+            self.vectors.append(vec)
+            self.norms.append(math.sqrt(sum(v * v for v in vec.values())) or 1.0)
+            self.word_counts.append(max(1, len(sample["content"].split())))
+
+    def _idf(self, term: str) -> float:
+        return math.log((self.n_docs + 1) / (self.df[term] + 1)) + 1.0
+
+    def rank(self, query_text: str) -> list[dict[str, Any]]:
+        """Return every sample, best match first."""
+        q_feats = _ngrams_and_words(query_text)
+        q_vec = {t: cnt * self._idf(t) for t, cnt in q_feats.items()}
+        q_norm = math.sqrt(sum(v * v for v in q_vec.values())) or 1.0
+        q_words = max(1, len(query_text.split()))
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for sample, d_vec, d_norm, s_words in zip(
+            self.samples, self.vectors, self.norms, self.word_counts
+        ):
+            dot = sum(q_vec[t] * val for t, val in d_vec.items() if t in q_vec)
+            cos = dot / (q_norm * d_norm)
+            len_sim = min(q_words, s_words) / max(q_words, s_words)
+            weight_boost = 1.0 + (float(sample.get("weight", 1.0)) - 1.0) * 0.25
+            scored.append(((0.65 * cos + 0.35 * len_sim) * weight_boost, sample))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [item[1] for item in scored]
+
+
+def build_retrieval_index(samples: list[dict[str, Any]]) -> RetrievalIndex:
+    return RetrievalIndex(samples)
+
+
 def retrieve_similar_samples(
     query_text: str,
     samples: list[dict[str, Any]],
     top_k: int = 5,
+    index: RetrievalIndex | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieve the top-k most stylistically relevant samples via TF-IDF cosine + gold weighting."""
     if not samples:
         return []
     if len(samples) <= top_k:
         return sorted(samples, key=lambda s: float(s.get("weight", 1.0)), reverse=True)
-
-    docs = [_ngrams_and_words(s["content"]) for s in samples]
-    df: Counter[str] = Counter()
-    for doc in docs:
-        for term in doc.keys():
-            df[term] += 1
-
-    n_docs = len(docs)
-    q_feats = _ngrams_and_words(query_text)
-    q_vec: dict[str, float] = {
-        t: cnt * (math.log((n_docs + 1) / (df[t] + 1)) + 1.0)
-        for t, cnt in q_feats.items()
-    }
-    q_norm = math.sqrt(sum(v * v for v in q_vec.values())) or 1.0
-    q_words = max(1, len(query_text.split()))
-
-    scored: list[tuple[float, dict[str, Any]]] = []
-    for sample, doc in zip(samples, docs):
-        d_vec = {
-            t: cnt * (math.log((n_docs + 1) / (df[t] + 1)) + 1.0)
-            for t, cnt in doc.items()
-        }
-        d_norm = math.sqrt(sum(v * v for v in d_vec.values())) or 1.0
-        dot = sum(q_vec[t] * val for t, val in d_vec.items() if t in q_vec)
-        cos = dot / (q_norm * d_norm)
-
-        # Length proximity & gold-edit boost
-        s_words = max(1, len(sample["content"].split()))
-        len_sim = min(q_words, s_words) / max(q_words, s_words)
-        weight_boost = 1.0 + (float(sample.get("weight", 1.0)) - 1.0) * 0.25
-        score = (0.65 * cos + 0.35 * len_sim) * weight_boost
-        scored.append((score, sample))
-
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return [item[1] for item in scored[:top_k]]
+    idx = index if index is not None and index.samples is samples else RetrievalIndex(samples)
+    return idx.rank(query_text)[:top_k]
 
 
 def learn_from_user_edit(
