@@ -29,6 +29,8 @@ MIN_DRAFT_CHARS = 50
 DEFAULT_BASE_MODEL = "mlx-community/gemma-4-12B-it-4bit"
 DEFAULT_HISTORY_LATEST = 5
 KIND = "a piece of writing"
+DEFAULT_SECTION_WORDS = 100
+MIN_SECTION_WORDS = 20
 
 _GREETING_RE = re.compile(r"^(hi|hello|hey|dear|good (morning|afternoon|evening))\b[^\n]{0,40}$", re.IGNORECASE)
 _SIGNOFF_RE = re.compile(
@@ -70,6 +72,19 @@ def load_drafts(files: list[Path], history_latest: int | None, db_path: Path | N
             if picked >= history_latest:
                 break
     return [(s, t.strip()) for s, t in drafts if len(t.strip()) >= MIN_DRAFT_CHARS]
+
+
+def split_sections(draft: str, limit: int) -> list[str]:
+    """Paragraphs in order; a long paragraph is cut at sentence ends into pieces of at most `limit` words.
+
+    Paragraphs are never merged, so a heading or question label stays a piece of its own.
+    """
+    pieces: list[str] = []
+    for para in re.split(r"\n\s*\n", draft.strip()):
+        para = para.strip()
+        if para:
+            pieces.extend(common.split_long_text(para, limit))
+    return pieces
 
 
 # ---------------------------------------------------------------- mlx-lm
@@ -264,6 +279,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--temp", type=float, default=0.7, help="Sampling temperature (default 0.7)")
     ap.add_argument("--seed", type=int, default=1234, help="Fixed sampling seed")
     ap.add_argument("--max-tries", type=int, default=4, help="Re-write with a new seed while an answer has defects (default 4)")
+    ap.add_argument(
+        "--sections", type=int, nargs="?", const=DEFAULT_SECTION_WORDS, default=None,
+        help=f"Write each draft in sections of at most N words (default {DEFAULT_SECTION_WORDS}) and add the joined document",
+    )
     ap.add_argument("--baseline", action="store_true", help="Also generate from the base model without the adapter")
     ap.add_argument("--show", action="store_true", help="Print the output texts")
     ap.add_argument("--run", action="store_true", help="Make notes and generate (local only)")
@@ -301,17 +320,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     train_chunks = load_train_chunks(layout)
 
-    results = []
-    for i, (source, draft) in enumerate(drafts, 1):
+    variants = [("adapter", layout.adapter)] + ([("baseline", None)] if args.baseline else [])
+
+    def write_entry(source: str, draft: str) -> dict | None:
         words = common.word_count(draft)
         notes = common.make_notes(draft, args.notes_model)
         if notes is None:
-            print(f"draft {i}: could not make valid notes, skipped")
-            continue
+            print(f"{source}: could not make valid notes, skipped")
+            return None
         prompt = common.build_user_prompt(KIND, words, notes)
         max_tokens = int(common.round10(words) * 2.5)
         entry: dict = {"source": source, "draft_words": words, "notes": notes}
-        variants = [("adapter", layout.adapter)] + ([("baseline", None)] if args.baseline else [])
         for label, adapter in variants:
 
             def make(seed: int, adapter: Path | None = adapter) -> str:
@@ -327,7 +346,38 @@ def main(argv: list[str] | None = None) -> int:
             metrics["defects"] = defects
             metrics["tries"] = tries
             entry[label] = {"text": text, "metrics": metrics}
-        results.append(entry)
+        return entry
+
+    results = []
+    for i, (source, draft) in enumerate(drafts, 1):
+        if not args.sections:
+            entry = write_entry(source, draft)
+            if entry:
+                results.append(entry)
+            continue
+        # Sections mode: write each section on its own, then add one entry for the joined document.
+        pieces = split_sections(draft, args.sections)
+        joined: dict[str, list[str]] = {label: [] for label, _ in variants}
+        for k, piece in enumerate(pieces, 1):
+            if common.word_count(piece) < MIN_SECTION_WORDS:
+                for parts in joined.values():  # headings and labels are kept as written
+                    parts.append(piece)
+                continue
+            entry = write_entry(f"{source} s{k:02d}", piece)
+            for label, _ in variants:
+                text = ((entry or {}).get(label) or {}).get("text")
+                joined[label].append(text or piece)  # a section that could not be written stays as drafted
+            if entry:
+                results.append(entry)
+            print(f"  {source}: section {k} of {len(pieces)} done", flush=True)
+        whole: dict = {"source": f"{source} joined", "draft_words": common.word_count(draft), "notes": [], "joined": True}
+        for label, _ in variants:
+            text = "\n\n".join(joined[label])
+            metrics = compute_metrics(draft, text, train_chunks)
+            metrics["defects"] = []
+            metrics["tries"] = 0
+            whole[label] = {"text": text, "metrics": metrics}
+        results.append(whole)
 
     layout.outputs.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -348,19 +398,19 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
 
-    print(f"{'draft':<26} {'kind':<9} {'words':>5} {'facts':>6} {'copied':>6} {'email':>5} {'in-house*':>9} {'tries':>5} defects")
+    print(f"{'draft':<30} {'kind':<9} {'words':>5} {'facts':>6} {'copied':>6} {'email':>5} {'in-house*':>9} {'tries':>5} defects")
     for e in results:
         for label in ("adapter", "baseline"):
             v = e.get(label)
             if not v:
                 continue
             if "error" in v:
-                print(f"{e['source']:<26} {label:<9} ERROR: {v['error']}")
+                print(f"{e['source']:<30} {label:<9} ERROR: {v['error']}")
                 continue
             m = v["metrics"]
             fc = "n/a" if m["fact_coverage"] is None else f"{m['fact_coverage'] * 100:.0f}%"
             print(
-                f"{e['source']:<26} {label:<9} {m['words']:>5} {fc:>6} {m['longest_copied_run']:>6} "
+                f"{e['source']:<30} {label:<9} {m['words']:>5} {fc:>6} {m['longest_copied_run']:>6} "
                 f"{'yes' if m['email_like'] else 'no':>5} {m['inhouse_human_score']:>9} "
                 f"{m.get('tries', 1):>5} {', '.join(m.get('defects') or []) or 'none'}"
             )

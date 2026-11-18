@@ -535,6 +535,34 @@ class GenerateDefectTests(unittest.TestCase):
         text, defects, tries = generate.generate_checked(lambda s: outputs[s], 100, 1, 2)
         self.assertEqual((defects, tries), (["too_short"], 2))
 
+
+class GenerateSectionsTests(GenerateTests):
+    def test_sections_are_written_separately_and_joined(self) -> None:
+        heading = "Q1 Outline the features"
+        para_a = " ".join(f"alpha{i}" for i in range(30)) + "."
+        para_b = " ".join(f"beta{i}" for i in range(30)) + "."
+        self.draft.write_text(f"{heading}\n\n{para_a}\n\n{para_b}")
+        self.assertEqual(len(generate.split_sections(self.draft.read_text(), 40)), 3)
+        out_a = "First section answer that is long enough to count as complete here. It has a second sentence too."
+        out_b = "Second section answer that is also long enough to count as complete. It ends properly as well."
+        code, out, calls = self.gen([out_a, out_b], "--run", "--sections", "40", "--max-tries", "1")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(calls), 2)  # the heading is kept, not rewritten
+        drafts = self.latest()["drafts"]
+        self.assertEqual([d["source"].split()[-1] for d in drafts], ["s02", "s03", "joined"])
+        self.assertTrue(drafts[-1]["joined"])
+        self.assertEqual(drafts[-1]["adapter"]["text"], f"{heading}\n\n{out_a}\n\n{out_b}")
+
+
+class ScanSkipTests(ScanTests):
+    def test_already_scanned_texts_are_not_scanned_again(self) -> None:
+        data = json.loads(self.path.read_text())
+        data["drafts"][0]["adapter"]["pangram"] = {"passed": True}
+        self.path.write_text(json.dumps(data))
+        code, out = run(scan, ["--db", str(self.db), "--work-dir", str(self.work), "--include-baseline"])
+        self.assertEqual(code, 0)
+        self.assertIn("Texts: 3 (180 words)", out)  # b.txt, c.txt and a.txt's baseline; not a.txt's adapter
+
 if __name__ == "__main__":
     unittest.main()
 
