@@ -42,7 +42,7 @@ def collect_items(data: dict, include_baseline: bool) -> list[tuple[dict, str, d
     for entry in data.get("drafts", []):
         for label in ("adapter", "baseline") if include_baseline else ("adapter",):
             v = entry.get(label)
-            if v and v.get("text"):
+            if v and v.get("text") and "pangram" not in v:  # never pay twice for the same text
                 items.append((entry, label, v))
     return items
 
@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     items = collect_items(data, args.include_baseline)
     if not items:
-        print("Nothing to scan: no output texts in that file.")
+        print("Nothing to scan: no output texts in that file that have not been scanned already.")
         return 1
 
     db_path = common.resolve_db(args.db)
@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
 
     model = settings.get("pangram_model") or "pangram-4"
     public = settings.get("pangram_public_link", "false").lower() == "true"
-    print(f"{'draft':<26} {'kind':<9} {'words':>5} {'AI%':>5} {'humanizer':>9} {'result':>6}")
+    print(f"{'draft':<30} {'kind':<9} {'words':>5} {'AI%':>5} {'humanizer':>9} {'result':>6}")
     passed = 0
     for entry, label, v in items:
         words = common.word_count(v["text"])
@@ -110,13 +110,13 @@ def main(argv: list[str] | None = None) -> int:
             passed += ok
             ai = f"{float(scan.get('fraction_ai') or 0) * 100:.0f}%"
             hum = float(scan.get("max_humanizer_score") or 0)
-            print(f"{entry['source']:<26} {label:<9} {words:>5} {ai:>5} {hum:>9.2f} {'PASS' if ok else 'FAIL':>6}")
+            print(f"{entry['source']:<30} {label:<9} {words:>5} {ai:>5} {hum:>9.2f} {'PASS' if ok else 'FAIL':>6}")
         except PangramError as err:
             v["pangram_error"] = err.message
-            print(f"{entry['source']:<26} {label:<9} {words:>5} Pangram error: {err.message}")
+            print(f"{entry['source']:<30} {label:<9} {words:>5} Pangram error: {err.message}")
         except Exception as err:  # one failed scan must not stop the rest
             v["pangram_error"] = str(err)[:200]
-            print(f"{entry['source']:<26} {label:<9} {words:>5} Pangram error: {str(err)[:200]}")
+            print(f"{entry['source']:<30} {label:<9} {words:>5} Pangram error: {str(err)[:200]}")
 
     Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     print()
