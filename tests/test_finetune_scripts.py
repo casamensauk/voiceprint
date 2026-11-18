@@ -358,7 +358,7 @@ class GenerateTests(Base):
 
     def test_metrics_with_copied_run_and_greeting(self) -> None:
         out_text = f"Hi Sam,\n\nMaria is bringing 3 laptops to Leeds on 14 March. {self.copied} is copied here.\n\nBest,\nAlex"
-        code, out, calls = self.gen([out_text, "A plain answer about nothing in particular here."], "--run", "--baseline", "--show")
+        code, out, calls = self.gen([out_text, "A plain answer about nothing in particular here."], "--run", "--baseline", "--show", "--max-tries", "1")
         self.assertEqual(code, 0, out)
         data = self.latest()
         m = data["drafts"][0]["adapter"]["metrics"]
@@ -491,6 +491,49 @@ class ScanTests(Base):
         code, out = run(scan, ["--db", str(self.db), "--work-dir", str(self.work), "--include-baseline"])
         self.assertIn("Texts: 4", out)
 
+
+
+class GenerateDefectTests(unittest.TestCase):
+    def test_clean_text_has_no_defects(self):
+        text = "Instagram suits a lifestyle business. People aged 18 to 24 use it to find new products."
+        self.assertEqual(generate.find_defects(text, 16), [])
+
+    def test_broken_lines(self):
+        text = "ONLINE\nBRAND IDENTITY\nConsists of visual\ncomponents and unique\npersonality traits."
+        self.assertIn("broken_lines", generate.find_defects(text, 10))
+
+    def test_lowercase_start_and_unfinished_paragraph(self):
+        text = "Use the dashboard to measure your content\n\nuse average watch time to see how well it performs."
+        defects = generate.find_defects(text, 15)
+        self.assertIn("lowercase_start", defects)
+        self.assertIn("unfinished_paragraph", defects)
+
+    def test_repetition(self):
+        text = (
+            "Instagram is the best platform for me to reach a fitness audience. It is highly visual. "
+            "Instagram is the best platform for me as a health and fitness influencer."
+        )
+        self.assertIn("repetition", generate.find_defects(text, 30))
+
+    def test_too_short(self):
+        self.assertIn("too_short", generate.find_defects("A short and complete sentence here.", 100))
+
+    def test_generate_checked_retries_until_clean(self):
+        outputs = {5: "bad start\n\nno ending", 6: "A clean sentence that is complete. Another one follows it here."}
+        seeds = []
+
+        def make(seed):
+            seeds.append(seed)
+            return outputs[seed]
+
+        text, defects, tries = generate.generate_checked(make, 10, 5, 4)
+        self.assertEqual((seeds, defects, tries), ([5, 6], [], 2))
+        self.assertTrue(text.startswith("A clean"))
+
+    def test_generate_checked_keeps_least_faulty(self):
+        outputs = {1: "bad start\n\nno ending", 2: "Fine sentence but far too short."}
+        text, defects, tries = generate.generate_checked(lambda s: outputs[s], 100, 1, 2)
+        self.assertEqual((defects, tries), (["too_short"], 2))
 
 if __name__ == "__main__":
     unittest.main()

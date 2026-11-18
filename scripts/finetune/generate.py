@@ -173,6 +173,59 @@ def email_like(text: str) -> bool:
     return any(_SIGNOFF_RE.match(ln) for ln in lines[-2:])
 
 
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_PARA_END_RE = re.compile(r"[.!?][\"')\]]*$")
+MIN_LENGTH_RATIO = 0.6
+BROKEN_LINE_MEAN_CHARS = 45
+
+
+def find_defects(text: str, target_words: int) -> list[str]:
+    """Plain layout and coherence faults seen in adapter outputs. Empty list = clean."""
+    defects: list[str] = []
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return ["empty"]
+    if len(lines) >= 4 and sum(len(ln) for ln in lines) / len(lines) < BROKEN_LINE_MEAN_CHARS:
+        defects.append("broken_lines")
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if any(not _PARA_END_RE.search(p) for p in paragraphs):
+        defects.append("unfinished_paragraph")
+    if any(p[0].islower() for p in paragraphs):
+        defects.append("lowercase_start")
+    sentences = [common.norm_words(x) for x in _SENT_SPLIT_RE.split(" ".join(lines))]
+    sentences = [x for x in sentences if len(x) >= 6]
+    repeated = False
+    for i, a in enumerate(sentences):
+        for b in sentences[i + 1 :]:
+            sa, sb = set(a), set(b)
+            if a[:6] == b[:6] or len(sa & sb) / len(sa | sb) >= 0.6:
+                repeated = True
+    if repeated:
+        defects.append("repetition")
+    if target_words and common.word_count(text) < MIN_LENGTH_RATIO * target_words:
+        defects.append("too_short")
+    return defects
+
+
+def generate_checked(make, target_words: int, seed: int, max_tries: int) -> tuple[str, list[str], int]:
+    """Call make(seed) with successive seeds until an output has no defects.
+
+    Returns (text, defects, tries). When every try is faulty, the one with the fewest defects is kept.
+    """
+    best: tuple[str, list[str]] | None = None
+    tries = 0
+    for k in range(max(1, max_tries)):
+        tries = k + 1
+        text = make(seed + k)
+        defects = find_defects(text, target_words)
+        if best is None or len(defects) < len(best[1]):
+            best = (text, defects)
+        if not defects:
+            break
+    assert best is not None
+    return best[0], best[1], tries
+
+
 def compute_metrics(draft: str, output: str, train_chunks: list[list[str]]) -> dict:
     return {
         "words": common.word_count(output),
@@ -210,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", default=DEFAULT_BASE_MODEL, help="Base model the adapter was trained on")
     ap.add_argument("--temp", type=float, default=0.7, help="Sampling temperature (default 0.7)")
     ap.add_argument("--seed", type=int, default=1234, help="Fixed sampling seed")
+    ap.add_argument("--max-tries", type=int, default=4, help="Re-write with a new seed while an answer has defects (default 4)")
     ap.add_argument("--baseline", action="store_true", help="Also generate from the base model without the adapter")
     ap.add_argument("--show", action="store_true", help="Print the output texts")
     ap.add_argument("--run", action="store_true", help="Make notes and generate (local only)")
@@ -259,13 +313,20 @@ def main(argv: list[str] | None = None) -> int:
         entry: dict = {"source": source, "draft_words": words, "notes": notes}
         variants = [("adapter", layout.adapter)] + ([("baseline", None)] if args.baseline else [])
         for label, adapter in variants:
-            cmd = build_generate_command(layout, args.model, adapter, max_tokens, args.temp, args.seed)
+
+            def make(seed: int, adapter: Path | None = adapter) -> str:
+                cmd = build_generate_command(layout, args.model, adapter, max_tokens, args.temp, seed)
+                return clean_output(parse_generated(run_mlx_generate(cmd, prompt)))
+
             try:
-                text = clean_output(parse_generated(run_mlx_generate(cmd, prompt)))
+                text, defects, tries = generate_checked(make, words, args.seed, args.max_tries)
             except Exception as err:
                 entry[label] = {"error": str(err)[:200]}
                 continue
-            entry[label] = {"text": text, "metrics": compute_metrics(draft, text, train_chunks)}
+            metrics = compute_metrics(draft, text, train_chunks)
+            metrics["defects"] = defects
+            metrics["tries"] = tries
+            entry[label] = {"text": text, "metrics": metrics}
         results.append(entry)
 
     layout.outputs.mkdir(parents=True, exist_ok=True)
@@ -287,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
 
-    print(f"{'draft':<26} {'kind':<9} {'words':>5} {'facts':>6} {'copied':>6} {'email':>5} {'in-house*':>9}")
+    print(f"{'draft':<26} {'kind':<9} {'words':>5} {'facts':>6} {'copied':>6} {'email':>5} {'in-house*':>9} {'tries':>5} defects")
     for e in results:
         for label in ("adapter", "baseline"):
             v = e.get(label)
@@ -300,7 +361,8 @@ def main(argv: list[str] | None = None) -> int:
             fc = "n/a" if m["fact_coverage"] is None else f"{m['fact_coverage'] * 100:.0f}%"
             print(
                 f"{e['source']:<26} {label:<9} {m['words']:>5} {fc:>6} {m['longest_copied_run']:>6} "
-                f"{'yes' if m['email_like'] else 'no':>5} {m['inhouse_human_score']:>9}"
+                f"{'yes' if m['email_like'] else 'no':>5} {m['inhouse_human_score']:>9} "
+                f"{m.get('tries', 1):>5} {', '.join(m.get('defects') or []) or 'none'}"
             )
     print("* in-house score only: VoicePrint's own heuristic, not a Pangram result. 'copied' = longest run of words shared with the training set.")
     print(f"Saved: {out_path}")
