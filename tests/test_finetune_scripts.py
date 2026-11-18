@@ -537,21 +537,78 @@ class GenerateDefectTests(unittest.TestCase):
 
 
 class GenerateSectionsTests(GenerateTests):
+    def test_structure_is_kept_and_prose_grouped(self) -> None:
+        draft = (
+            "Q1 Outline the main features of the platforms\nYour Answer:\n"
+            + "Meta: " + " ".join(f"alpha{i}" for i in range(44)) + ".\n\n"
+            + "LinkedIn: " + " ".join(f"beta{i}" for i in range(44)) + ".\n"
+            + "Click one button then another one\nClick to edit\n"
+        )
+        pieces = generate.split_sections(draft, 110)
+        self.assertEqual([k for k, _ in pieces], ["keep", "keep", "write", "write", "keep"])
+        self.assertTrue(pieces[2][1].startswith("Meta:"))
+        self.assertTrue(pieces[3][1].startswith("LinkedIn:"))  # a new topic label starts a new section
+        self.assertIn("Click one button", pieces[3][1])  # a list step is rewritten, not kept
+        self.assertEqual(pieces[4][1], "Click to edit")
+
     def test_sections_are_written_separately_and_joined(self) -> None:
         heading = "Q1 Outline the features"
-        para_a = " ".join(f"alpha{i}" for i in range(30)) + "."
-        para_b = " ".join(f"beta{i}" for i in range(30)) + "."
+        para_a = "Meta: " + " ".join(f"alpha{i}" for i in range(44)) + "."
+        para_b = "LinkedIn: " + " ".join(f"beta{i}" for i in range(44)) + "."
         self.draft.write_text(f"{heading}\n\n{para_a}\n\n{para_b}")
-        self.assertEqual(len(generate.split_sections(self.draft.read_text(), 40)), 3)
         out_a = "First section answer that is long enough to count as complete here. It has a second sentence too."
         out_b = "Second section answer that is also long enough to count as complete. It ends properly as well."
-        code, out, calls = self.gen([out_a, out_b], "--run", "--sections", "40", "--max-tries", "1")
+        code, out, calls = self.gen([out_a, out_b], "--run", "--sections", "--max-tries", "1")
         self.assertEqual(code, 0, out)
         self.assertEqual(len(calls), 2)  # the heading is kept, not rewritten
         drafts = self.latest()["drafts"]
         self.assertEqual([d["source"].split()[-1] for d in drafts], ["s02", "s03", "joined"])
         self.assertTrue(drafts[-1]["joined"])
         self.assertEqual(drafts[-1]["adapter"]["text"], f"{heading}\n\n{out_a}\n\n{out_b}")
+
+
+class ContentDefectTests(unittest.TestCase):
+    DRAFT = "Instagram suits a lifestyle business. People aged 18 to 24 use Instagram Shopping to find new products."
+
+    def test_faithful_rewrite_is_clean(self):
+        text = "A lifestyle business does well on Instagram. People aged 18 to 24 find products through Instagram Shopping."
+        self.assertEqual(generate.find_defects(text, 17, self.DRAFT), [])
+
+    def test_lost_facts(self):
+        text = "A lifestyle business does well on social media. Young people find new products there."
+        self.assertIn("lost_facts", generate.find_defects(text, 14, self.DRAFT))
+
+    def test_changed_point_of_view(self):
+        text = "Instagram is where you show a lifestyle business. I use Instagram Shopping for people aged 18 to 24."
+        defects = generate.find_defects(text, 17, self.DRAFT)
+        self.assertIn("addresses_reader", defects)
+        self.assertIn("first_person_added", defects)
+
+    def test_invented_sentence(self):
+        text = (
+            "Instagram suits a lifestyle business with people aged 18 to 24 using Instagram Shopping. "
+            "Thanks again for asking about three separate examples yesterday morning."
+        )
+        self.assertIn("invented_sentence", generate.find_defects(text, 17, self.DRAFT))
+
+    def test_point_of_view_follows_the_whole_document(self):
+        text = "Instagram is where you show a lifestyle business. Instagram Shopping suits people aged 18 to 24."
+        self.assertIn("addresses_reader", generate.find_defects(text, 16, self.DRAFT))
+        self.assertNotIn("addresses_reader", generate.find_defects(text, 16, self.DRAFT, self.DRAFT + " You can post daily."))
+
+    def test_unwrap_and_capitals(self):
+        wrapped = "Younger people like short video, with\nTikTok being the main place.\nOlder people use Facebook."
+        self.assertEqual(
+            generate.unwrap_lines(wrapped),
+            "Younger people like short video, with TikTok being the main place.\nOlder people use Facebook.",
+        )
+        self.assertIn("capitals_line", generate.find_defects("MONITORING TIKTOK PERFORMANCE\nIt is tracked daily.", 6))
+        self.assertIn("stray_characters", generate.find_defects("S2W is all about using your network well.", 8))
+
+    def test_stray_characters_and_coarse_language(self):
+        self.assertIn("stray_characters", generate.find_defects("S9, Instagram suits a lifestyle business well.", 7))
+        self.assertIn("stray_characters", generate.find_defects("S\nInstagram suits a lifestyle business well.", 7))
+        self.assertIn("coarse_language", generate.find_defects("Show the real business, even the fuckups.", 7))
 
 
 class ScanSkipTests(ScanTests):

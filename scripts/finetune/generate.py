@@ -29,8 +29,8 @@ MIN_DRAFT_CHARS = 50
 DEFAULT_BASE_MODEL = "mlx-community/gemma-4-12B-it-4bit"
 DEFAULT_HISTORY_LATEST = 5
 KIND = "a piece of writing"
-DEFAULT_SECTION_WORDS = 100
-MIN_SECTION_WORDS = 20
+DEFAULT_SECTION_WORDS = 110
+MIN_SECTION_WORDS = 12
 
 _GREETING_RE = re.compile(r"^(hi|hello|hey|dear|good (morning|afternoon|evening))\b[^\n]{0,40}$", re.IGNORECASE)
 _SIGNOFF_RE = re.compile(
@@ -74,17 +74,67 @@ def load_drafts(files: list[Path], history_latest: int | None, db_path: Path | N
     return [(s, t.strip()) for s, t in drafts if len(t.strip()) >= MIN_DRAFT_CHARS]
 
 
-def split_sections(draft: str, limit: int) -> list[str]:
-    """Paragraphs in order; a long paragraph is cut at sentence ends into pieces of at most `limit` words.
+_QUESTION_RE = re.compile(r"^(?:Q|Question)\s*\d+\b", re.IGNORECASE)
+_TOPIC_RE = re.compile(r"^\S+(?: \S+)?:(?:\s|$)")  # "LinkedIn: ..." or "Meta (Facebook): ..."
+TOPIC_CUT_MIN_WORDS = 40
+SHORT_TAIL_WORDS = 40
 
-    Paragraphs are never merged, so a heading or question label stays a piece of its own.
+
+def is_structural(line: str) -> bool:
+    """A heading, question or label: kept exactly as written, never rewritten."""
+    line = line.strip()
+    n = common.word_count(line)
+    if _QUESTION_RE.match(line):
+        return True
+    if n <= 6 and line.endswith(":"):
+        return True
+    return n <= 3 and not line.endswith((".", "!", "?"))
+
+
+def split_sections(draft: str, limit: int) -> list[tuple[str, str]]:
+    """The draft as ordered ("keep" | "write", text) pieces.
+
+    Headings, questions and labels are "keep". The lines between them (prose and list steps alike) are
+    grouped into "write" sections of at most `limit` words, cut early where a new topic label starts,
+    with a short last section merged into the one before it.
     """
-    pieces: list[str] = []
-    for para in re.split(r"\n\s*\n", draft.strip()):
-        para = para.strip()
-        if para:
-            pieces.extend(common.split_long_text(para, limit))
-    return pieces
+    out: list[tuple[str, str]] = []
+    block: list[str] = []
+
+    def flush_block() -> None:
+        sections: list[list[str]] = []
+        cur: list[str] = []
+        cur_words = 0
+        for line in block:
+            for piece in common.split_long_text(line, limit):
+                w = common.word_count(piece)
+                new_topic = bool(_TOPIC_RE.match(piece)) and cur_words >= TOPIC_CUT_MIN_WORDS
+                if cur and (cur_words + w > limit or new_topic):
+                    sections.append(cur)
+                    cur, cur_words = [], 0
+                cur.append(piece)
+                cur_words += w
+        if cur:
+            sections.append(cur)
+        if len(sections) > 1:
+            last = sum(common.word_count(x) for x in sections[-1])
+            prev = sum(common.word_count(x) for x in sections[-2])
+            if last < SHORT_TAIL_WORDS and prev + last <= limit * 1.5:
+                sections[-2].extend(sections.pop())
+        out.extend(("write", "\n".join(sec)) for sec in sections)
+        block.clear()
+
+    for raw in draft.splitlines():
+        line = raw.strip()
+        if not re.search(r"\w", line):
+            continue  # blank lines and stray punctuation
+        if is_structural(line):
+            flush_block()
+            out.append(("keep", line))
+        else:
+            block.append(line)
+    flush_block()
+    return out
 
 
 # ---------------------------------------------------------------- mlx-lm
@@ -194,8 +244,45 @@ MIN_LENGTH_RATIO = 0.6
 BROKEN_LINE_MEAN_CHARS = 45
 
 
-def find_defects(text: str, target_words: int) -> list[str]:
-    """Plain layout and coherence faults seen in adapter outputs. Empty list = clean."""
+_YOU_RE = re.compile(r"\b(you|your|you're|you've|yours)\b", re.IGNORECASE)
+_FIRST_PERSON_RE = re.compile(r"\b(I|I'm|I've|I'll|my|we|we're|we've|our|us)\b")
+_STRAY_START_RE = re.compile(r"^(?:[B-HJ-Z]\d*[,.]?\s+[A-Z]|[A-Z]\d+[A-Z]?\b)")
+_COARSE = {"fuck", "fucked", "fucking", "fuckup", "fuckups", "shit", "shitty", "bollocks", "crap", "arse", "bloody", "piss", "pissed", "damn"}
+MIN_FACT_COVERAGE = 0.5
+MIN_SENTENCE_OVERLAP = 0.25
+
+
+def _stems(text: str) -> set[str]:
+    return {w[:5] for w in common.norm_words(text) if len(w) >= 4}
+
+
+def content_defects(text: str, draft: str, voice_ref: str | None = None) -> list[str]:
+    """Faults that need the draft to judge: lost facts, a changed point of view, invented sentences.
+
+    Point of view is compared with `voice_ref` (the whole document) when given, so a section may say
+    "you" if the document does anywhere.
+    """
+    defects: list[str] = []
+    plain = text.replace("\u2019", "'")
+    draft_plain = (voice_ref or draft).replace("\u2019", "'")
+    coverage = fact_coverage(draft, text)
+    if coverage is not None and coverage < MIN_FACT_COVERAGE:
+        defects.append("lost_facts")
+    if _YOU_RE.search(plain) and not _YOU_RE.search(draft_plain):
+        defects.append("addresses_reader")
+    if _FIRST_PERSON_RE.search(plain) and not _FIRST_PERSON_RE.search(draft_plain):
+        defects.append("first_person_added")
+    draft_stems = _stems(draft)
+    for sentence in _SENT_SPLIT_RE.split(" ".join(text.split())):
+        stems = _stems(sentence)
+        if len(stems) >= 5 and len(stems & draft_stems) / len(stems) < MIN_SENTENCE_OVERLAP:
+            defects.append("invented_sentence")
+            break
+    return defects
+
+
+def find_defects(text: str, target_words: int, draft: str | None = None, voice_ref: str | None = None) -> list[str]:
+    """Layout, coherence and (when the draft is given) content faults. Empty list = clean."""
     defects: list[str] = []
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
@@ -219,10 +306,20 @@ def find_defects(text: str, target_words: int) -> list[str]:
         defects.append("repetition")
     if target_words and common.word_count(text) < MIN_LENGTH_RATIO * target_words:
         defects.append("too_short")
+    if _STRAY_START_RE.match(text.strip()) or any(len(ln) <= 2 for ln in lines):
+        defects.append("stray_characters")
+    if set(common.norm_words(text)) & _COARSE:
+        defects.append("coarse_language")
+    if any(len(ln.split()) >= 3 and ln.upper() == ln and re.search(r"[A-Z]", ln) for ln in lines):
+        defects.append("capitals_line")
+    if draft is not None:
+        defects.extend(content_defects(text, draft, voice_ref))
     return defects
 
 
-def generate_checked(make, target_words: int, seed: int, max_tries: int) -> tuple[str, list[str], int]:
+def generate_checked(
+    make, target_words: int, seed: int, max_tries: int, draft: str | None = None, voice_ref: str | None = None
+) -> tuple[str, list[str], int]:
     """Call make(seed) with successive seeds until an output has no defects.
 
     Returns (text, defects, tries). When every try is faulty, the one with the fewest defects is kept.
@@ -232,7 +329,7 @@ def generate_checked(make, target_words: int, seed: int, max_tries: int) -> tupl
     for k in range(max(1, max_tries)):
         tries = k + 1
         text = make(seed + k)
-        defects = find_defects(text, target_words)
+        defects = find_defects(text, target_words, draft, voice_ref)
         if best is None or len(defects) < len(best[1]):
             best = (text, defects)
         if not defects:
@@ -251,9 +348,34 @@ def compute_metrics(draft: str, output: str, train_chunks: list[list[str]]) -> d
     }
 
 
+def unwrap_lines(text: str) -> str:
+    """Join hard-wrapped lines (a habit learned from plain-text email) back into sentences.
+
+    A line break is kept only after a line that ends a sentence or a label (. ! ? :) and at blank lines.
+    """
+    out: list[str] = []
+    for para in re.split(r"\n\s*\n", text):
+        cur = ""
+        lines: list[str] = []
+        for ln in (x.strip() for x in para.splitlines()):
+            if not ln:
+                continue
+            if cur and not cur.endswith((".", "!", "?", ":")):
+                cur += " " + ln
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = ln
+        if cur:
+            lines.append(cur)
+        if lines:
+            out.append("\n".join(lines))
+    return "\n\n".join(out)
+
+
 def clean_output(text: str) -> str:
     cleaned, _ = common.strip_hidden_characters(text)
-    return common.strip_placeholders(cleaned).strip()
+    return unwrap_lines(common.strip_placeholders(cleaned)).strip()
 
 
 def load_train_chunks(layout: common.Layout) -> list[list[str]]:
@@ -278,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", default=DEFAULT_BASE_MODEL, help="Base model the adapter was trained on")
     ap.add_argument("--temp", type=float, default=0.7, help="Sampling temperature (default 0.7)")
     ap.add_argument("--seed", type=int, default=1234, help="Fixed sampling seed")
-    ap.add_argument("--max-tries", type=int, default=4, help="Re-write with a new seed while an answer has defects (default 4)")
+    ap.add_argument("--max-tries", type=int, default=6, help="Re-write with a new seed while an answer has defects (default 6)")
     ap.add_argument(
         "--sections", type=int, nargs="?", const=DEFAULT_SECTION_WORDS, default=None,
         help=f"Write each draft in sections of at most N words (default {DEFAULT_SECTION_WORDS}) and add the joined document",
@@ -322,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
 
     variants = [("adapter", layout.adapter)] + ([("baseline", None)] if args.baseline else [])
 
-    def write_entry(source: str, draft: str) -> dict | None:
+    def write_entry(source: str, draft: str, voice_ref: str | None = None) -> dict | None:
         words = common.word_count(draft)
         notes = common.make_notes(draft, args.notes_model)
         if notes is None:
@@ -338,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
                 return clean_output(parse_generated(run_mlx_generate(cmd, prompt)))
 
             try:
-                text, defects, tries = generate_checked(make, words, args.seed, args.max_tries)
+                text, defects, tries = generate_checked(make, words, args.seed, args.max_tries, draft, voice_ref)
             except Exception as err:
                 entry[label] = {"error": str(err)[:200]}
                 continue
@@ -358,18 +480,18 @@ def main(argv: list[str] | None = None) -> int:
         # Sections mode: write each section on its own, then add one entry for the joined document.
         pieces = split_sections(draft, args.sections)
         joined: dict[str, list[str]] = {label: [] for label, _ in variants}
-        for k, piece in enumerate(pieces, 1):
-            if common.word_count(piece) < MIN_SECTION_WORDS:
-                for parts in joined.values():  # headings and labels are kept as written
+        for k, (kind, piece) in enumerate(pieces, 1):
+            if kind == "keep" or common.word_count(piece) < MIN_SECTION_WORDS:
+                for parts in joined.values():  # headings, questions and labels are kept as written
                     parts.append(piece)
                 continue
-            entry = write_entry(f"{source} s{k:02d}", piece)
+            entry = write_entry(f"{source} s{k:02d}", piece, draft)
             for label, _ in variants:
                 text = ((entry or {}).get(label) or {}).get("text")
                 joined[label].append(text or piece)  # a section that could not be written stays as drafted
             if entry:
                 results.append(entry)
-            print(f"  {source}: section {k} of {len(pieces)} done", flush=True)
+            print(f"  {source}: piece {k} of {len(pieces)} done", flush=True)
         whole: dict = {"source": f"{source} joined", "draft_words": common.word_count(draft), "notes": [], "joined": True}
         for label, _ in variants:
             text = "\n\n".join(joined[label])
